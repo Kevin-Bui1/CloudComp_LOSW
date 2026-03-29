@@ -1,7 +1,7 @@
-package game.campaign;
+package com.legends.campaign;
 
 import db.GameSaveDAO;
-import game.battle.Hero;
+import com.legends.battle.Hero;
 
 import java.util.List;
 import java.util.Map;

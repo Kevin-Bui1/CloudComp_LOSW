@@ -1,5 +1,5 @@
-package game.campaign;
-import game.party.Party;
+package com.legends.campaign;
+import com.legends.party.Party;
 /**
  * factory-created for each step of the 30-room campaign.
  * execute() MUST be called from a background thread (SwingWorker), not the EDT,

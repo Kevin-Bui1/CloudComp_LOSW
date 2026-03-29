@@ -1,6 +1,6 @@
-package game.campaign;
+package com.legends.campaign;
 
-import game.inn.InnRoom;
+import com.legends.inn.InnRoom;
 import java.util.Random;
 
 public class RoomFactory {

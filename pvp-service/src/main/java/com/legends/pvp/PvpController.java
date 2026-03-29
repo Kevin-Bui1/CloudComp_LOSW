@@ -1,8 +1,8 @@
-package game.pvp;
+package com.legends.pvp;
 
 import db.GameSaveDAO;
-import game.battle.Hero;
-import game.battle.Unit;
+import com.legends.battle.Hero;
+import com.legends.battle.Unit;
 import ui.battle.BattleGUI;
 
 import javax.swing.*;

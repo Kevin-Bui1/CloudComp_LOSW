@@ -1,7 +1,7 @@
-package game.campaign;
+package com.legends.campaign;
 
-import game.battle.*;
-import game.party.Party;
+import com.legends.battle.*;
+import com.legends.party.Party;
 import ui.battle.BattleGUI;
 
 import javax.swing.*;

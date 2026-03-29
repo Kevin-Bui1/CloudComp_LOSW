@@ -1,6 +1,6 @@
-package game.party;
+package com.legends.party;
 
-import game.battle.Hero;
+import com.legends.battle.Hero;
 import java.util.*;
 
 /** Holds heroes, gold, and inventory. */

@@ -1,8 +1,8 @@
-package game.campaign;
+package com.legends.campaign;
 
 import db.GameSaveDAO;
-import game.battle.Hero;
-import game.party.Party;
+import com.legends.battle.Hero;
+import com.legends.party.Party;
 
 import java.util.List;
 
