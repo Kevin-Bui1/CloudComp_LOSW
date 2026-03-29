@@ -1,6 +1,6 @@
-package game.battle.observer;
-import game.battle.Action;
-import game.battle.Unit;
+package com.legends.battle.observer;
+import com.legends.battle.Action;
+import com.legends.battle.Unit;
 /** Observer pattern: Battle publishes turn/damage/end events to subscribers (e.g. BattleGUI). */
 public interface BattleObserver {
     default void onTurnStart(Unit unit) {}

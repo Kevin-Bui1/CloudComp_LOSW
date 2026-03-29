@@ -1,9 +1,9 @@
-package game.battle;
+package com.legends.battle;
 
-import game.battle.observer.BattleObserver;
-import game.battle.strategy.impl.AttackStrategy;
-import game.battle.strategy.impl.CastStrategy;
-import game.battle.strategy.impl.DefendStrategy;
+import com.legends.battle.observer.BattleObserver;
+import com.legends.battle.strategy.impl.AttackStrategy;
+import com.legends.battle.strategy.impl.CastStrategy;
+import com.legends.battle.strategy.impl.DefendStrategy;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;

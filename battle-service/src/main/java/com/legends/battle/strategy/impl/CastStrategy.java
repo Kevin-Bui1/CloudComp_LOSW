@@ -1,9 +1,9 @@
-package game.battle.strategy.impl;
+package com.legends.battle.strategy.impl;
 
-import game.battle.Battle;
-import game.battle.Hero;
-import game.battle.Unit;
-import game.battle.strategy.BattleActionStrategy;
+import com.legends.battle.Battle;
+import com.legends.battle.Hero;
+import com.legends.battle.Unit;
+import com.legends.battle.strategy.BattleActionStrategy;
 
 import java.util.List;
 
