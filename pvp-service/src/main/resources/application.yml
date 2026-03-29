@@ -1,0 +1,6 @@
+server:
+  port: 5004
+
+spring:
+  application:
+    name: pvp-service

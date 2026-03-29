@@ -1,0 +1,9 @@
+com\legends\profile\dto\AuthRequest.class
+com\legends\profile\repository\UserRepository.class
+com\legends\profile\service\AccountManager.class
+com\legends\profile\controller\HealthController.class
+com\legends\profile\ProfileServiceApplication.class
+com\legends\profile\model\UserProfile.class
+com\legends\profile\controller\ProfileController.class
+com\legends\profile\dto\AuthResponse.class
+com\legends\profile\security\SecurityConfig.class

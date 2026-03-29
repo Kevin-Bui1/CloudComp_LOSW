@@ -1,0 +1,72 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: legends-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: losw
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  data-service:
+    build: ./data-service
+    container_name: data-service
+    ports:
+      - "5003:5003"
+    environment:
+      DB_URL: jdbc:mysql://mysql:3306/losw
+      DB_USER: root
+      DB_PASSWORD: root
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  profile-service:
+    build: ./profile-service
+    container_name: profile-service
+    ports:
+      - "5000:5000"
+    environment:
+      DATA_SERVICE_URL: http://data-service:5003
+    depends_on:
+      - data-service
+
+  battle-service:
+    build: ./battle-service
+    container_name: battle-service
+    ports:
+      - "5001:5001"
+
+  pve-service:
+    build: ./pve-service
+    container_name: pve-service
+    ports:
+      - "5002:5002"
+    environment:
+      DATA_SERVICE_URL: http://data-service:5003
+      BATTLE_SERVICE_URL: http://battle-service:5001
+    depends_on:
+      - data-service
+      - battle-service
+
+  pvp-service:
+    build: ./pvp-service
+    container_name: pvp-service
+    ports:
+      - "5004:5004"
+    environment:
+      DATA_SERVICE_URL: http://data-service:5003
+      BATTLE_SERVICE_URL: http://battle-service:5001
+    depends_on:
+      - data-service
+      - battle-service
+
+volumes:
+  mysql_data:
