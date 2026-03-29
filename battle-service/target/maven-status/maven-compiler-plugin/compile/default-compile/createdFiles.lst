@@ -1,0 +1,13 @@
+com\legends\battle\service\BattleService.class
+com\legends\battle\model\Unit.class
+com\legends\battle\dto\UnitDTO.class
+com\legends\battle\model\Enemy.class
+com\legends\battle\service\Battle.class
+com\legends\battle\model\Action.class
+com\legends\battle\controller\BattleController.class
+com\legends\battle\BattleServiceApplication.class
+com\legends\battle\dto\BattleResponse.class
+com\legends\battle\model\Hero.class
+com\legends\battle\service\Battle$1.class
+com\legends\battle\controller\HealthController.class
+com\legends\battle\dto\BattleRequest.class
