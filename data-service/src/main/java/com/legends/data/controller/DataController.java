@@ -8,7 +8,31 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
+/**
+ * Data Service REST API on port 5003.
+ *
+ * Campaign:
+ *   POST   /api/data/campaign/save          — save/update campaign progress
+ *   GET    /api/data/campaign/{userId}       — load active campaign
+ *   PATCH  /api/data/campaign/{userId}/complete — mark campaign finished
+ *   DELETE /api/data/party/{partyId}         — delete a saved party
+ *   GET    /api/data/parties/{userId}        — list all parties for a user
+ *
+ * Scores:
+ *   POST   /api/data/scores/{userId}         — record a campaign score
+ *   GET    /api/data/scores/{userId}/best    — get user's best score
+ *   GET    /api/data/scores/top              — get leaderboard (top 10)
+ *
+ * PvP:
+ *   POST   /api/data/pvp/result             — record a PvP win/loss
+ *   GET    /api/data/pvp/{userId}/record    — get win/loss counts
+ *
+ * Player helpers (used by pvp-service for invite validation):
+ *   GET    /api/data/players/{username}/eligible          — exists + has parties?
+ *   GET    /api/data/players/{username}/parties/{name}/heroes — heroes in a party
+ */
 @RestController
 @RequestMapping("/api/data")
 public class DataController {
@@ -19,13 +43,13 @@ public class DataController {
         this.gameSaveDAO = gameSaveDAO;
     }
 
-    /** Save or update a campaign's progress. */
+    // ── Campaign ─────────────────────────────────────────────────────────
+
     @PostMapping("/campaign/save")
     public ResponseEntity<Party> saveCampaign(@RequestBody SaveRequest request) {
         return ResponseEntity.ok(gameSaveDAO.saveCampaignProgress(request));
     }
 
-    /** Load the active campaign state for a user. */
     @GetMapping("/campaign/{userId}")
     public ResponseEntity<CampaignState> loadCampaign(@PathVariable Long userId) {
         return gameSaveDAO.fetchSavedCampaign(userId)
@@ -33,23 +57,90 @@ public class DataController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    /** Mark a campaign as completed. */
     @PatchMapping("/campaign/{userId}/complete")
     public ResponseEntity<Void> completeCampaign(@PathVariable Long userId) {
         gameSaveDAO.completeCampaign(userId);
         return ResponseEntity.ok().build();
     }
 
-    /** Delete a saved party */
     @DeleteMapping("/party/{partyId}")
     public ResponseEntity<Void> deleteParty(@PathVariable Long partyId) {
         gameSaveDAO.deleteParty(partyId);
         return ResponseEntity.ok().build();
     }
 
-    /** List all saved parties for a user. */
     @GetMapping("/parties/{userId}")
     public ResponseEntity<List<Party>> getSavedParties(@PathVariable Long userId) {
         return ResponseEntity.ok(gameSaveDAO.getSavedParties(userId));
+    }
+
+    // ── Scores ───────────────────────────────────────────────────────────
+
+    @PostMapping("/scores/{userId}")
+    public ResponseEntity<Void> saveScore(
+            @PathVariable Long userId,
+            @RequestBody Map<String, Integer> body) {
+        int score = body.getOrDefault("score", 0);
+        gameSaveDAO.saveScore(userId, score);
+        return ResponseEntity.ok().build();
+    }
+
+    @GetMapping("/scores/{userId}/best")
+    public ResponseEntity<Map<String, Object>> getBestScore(@PathVariable Long userId) {
+        int best = gameSaveDAO.getBestScore(userId);
+        return ResponseEntity.ok(Map.of("userId", userId, "bestScore", best));
+    }
+
+    @GetMapping("/scores/top")
+    public ResponseEntity<List<Map<String, Object>>> getTopScores(
+            @RequestParam(defaultValue = "10") int limit) {
+        return ResponseEntity.ok(gameSaveDAO.getTopScores(limit));
+    }
+
+    // ── PvP ──────────────────────────────────────────────────────────────
+
+    @PostMapping("/pvp/result")
+    public ResponseEntity<Void> recordPvpResult(@RequestBody Map<String, String> body) {
+        String winner = body.get("winnerUsername");
+        String loser  = body.get("loserUsername");
+        if (winner == null || loser == null)
+            return ResponseEntity.badRequest().build();
+        gameSaveDAO.recordPvpResult(winner, loser);
+        return ResponseEntity.ok().build();
+    }
+
+    @GetMapping("/pvp/{userId}/record")
+    public ResponseEntity<Map<String, Object>> getPvpRecord(@PathVariable Long userId) {
+        int[] record = gameSaveDAO.getPvpRecord(userId);
+        return ResponseEntity.ok(Map.of(
+                "userId", userId,
+                "wins",   record[0],
+                "losses", record[1]
+        ));
+    }
+
+    // ── Player helpers (used by pvp-service) ────────────────────────────
+
+    /**
+     * Returns { eligible: true/false } — used by pvp-service to validate
+     * that a player exists and has at least one saved party before an invite.
+     */
+    @GetMapping("/players/{username}/eligible")
+    public ResponseEntity<Map<String, Object>> isPlayerEligible(@PathVariable String username) {
+        boolean eligible = gameSaveDAO.isPlayerEligible(username);
+        return ResponseEntity.ok(Map.of("username", username, "eligible", eligible));
+    }
+
+    /**
+     * Returns the heroes for a specific named party — used by pvp-service
+     * to load both parties before submitting them to the battle-service.
+     */
+    @GetMapping("/players/{username}/parties/{partyName}/heroes")
+    public ResponseEntity<?> getPartyHeroes(
+            @PathVariable String username,
+            @PathVariable String partyName) {
+        var heroes = gameSaveDAO.getPartyHeroes(username, partyName);
+        if (heroes == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(heroes);
     }
 }
