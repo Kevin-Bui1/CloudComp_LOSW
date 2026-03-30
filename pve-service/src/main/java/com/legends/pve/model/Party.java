@@ -1,51 +1,75 @@
 package com.legends.pve.model;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
- * Party is the group of heroes the player controls during a PvE campaign.
+ * Party holds the player's heroes, gold, and inventory during a PvE campaign.
  *
- * Note: there's also a Party entity in data-service, but that's a JPA database
- * entity. This one is just a plain Java object used in memory during gameplay.
- * When the player saves, the PveController converts this into a save request
- * and sends it to the Data Service.
+ * The inventory is a simple name→quantity map (e.g. "Bread" → 2).
+ * Items are purchased at the Inn and consumed from the campaign view.
  */
 public class Party {
 
-    private List<Hero> heroes = new ArrayList<>();
-    private int gold          = 0;
+    private List<Hero>          heroes    = new ArrayList<>();
+    private int                 gold      = 0;
+    private Map<String, Integer> inventory = new HashMap<>();
 
     public Party() {}
 
-    /** Adds a hero to the party. The 5-hero max is enforced by the caller. */
-    public void addHero(Hero hero) { heroes.add(hero); }
+    // ── Heroes ────────────────────────────────────────────────────────────
+
+    /** Adds a hero. Returns false (and does nothing) if the party is already at 5. */
+    public boolean addHero(Hero hero) {
+        if (heroes.size() >= 5) return false;
+        heroes.add(hero);
+        return true;
+    }
 
     public List<Hero> getHeroes() { return heroes; }
 
-    /**
-     * Sums up all hero levels. Used for:
-     *  - Room probability calculation (higher = more battles)
-     *  - Enemy scaling in RoomFactory
-     *  - Final score display
-     */
     public int getCumulativeLevel() {
         return heroes.stream().mapToInt(Hero::getLevel).sum();
     }
 
-    /** Returns true if at least one hero is still standing (hp > 0). */
     public boolean hasLivingHeroes() {
         return heroes.stream().anyMatch(h -> h.getHp() > 0);
     }
+
+    // ── Gold ──────────────────────────────────────────────────────────────
 
     public int getGold()            { return gold; }
     public void setGold(int gold)   { this.gold = gold; }
     public void addGold(int amount) { this.gold += amount; }
 
-    /** Returns false if the player doesn't have enough gold — used for shop purchases. */
+    /** Deducts gold if available. Returns false if insufficient funds. */
     public boolean deductGold(int amount) {
         if (gold < amount) return false;
         gold -= amount;
+        return true;
+    }
+
+    // ── Inventory ─────────────────────────────────────────────────────────
+
+    public Map<String, Integer> getInventory() { return inventory; }
+    public void setInventory(Map<String, Integer> inventory) { this.inventory = inventory; }
+
+    /** Adds qty of itemName to the inventory. */
+    public void addItem(String itemName, int qty) {
+        inventory.merge(itemName, qty, Integer::sum);
+    }
+
+    /**
+     * Removes one unit of itemName from inventory.
+     * Returns false if the item is not in inventory or qty is 0.
+     */
+    public boolean useItem(String itemName) {
+        int qty = inventory.getOrDefault(itemName, 0);
+        if (qty <= 0) return false;
+        if (qty == 1) inventory.remove(itemName);
+        else          inventory.put(itemName, qty - 1);
         return true;
     }
 }

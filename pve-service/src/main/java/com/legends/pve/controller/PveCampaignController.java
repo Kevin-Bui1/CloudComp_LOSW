@@ -6,17 +6,23 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * PvE REST API on port 5002.
  *
- * POST /api/pve/{userId}/start           — start new campaign
- * POST /api/pve/{userId}/next-room       — advance to next room
- * GET  /api/pve/{userId}/campaign        — get current campaign state
- * POST /api/pve/{userId}/restore         — restore from saved state
- * GET  /api/pve/{userId}/score           — calculate campaign score
- * POST /api/pve/{userId}/end             — end/save campaign session
- * With the use of AI
+ * Campaign lifecycle:
+ *   POST /api/pve/{userId}/start           — start new campaign
+ *   POST /api/pve/{userId}/next-room       — advance to next room
+ *   GET  /api/pve/{userId}/campaign        — get current campaign state
+ *   POST /api/pve/{userId}/restore         — restore from saved state
+ *   GET  /api/pve/{userId}/score           — calculate campaign score
+ *   POST /api/pve/{userId}/end             — end/save campaign session
+ *
+ * Inn actions (UC4 — must be in an inn room before calling these):
+ *   POST /api/pve/{userId}/inn/buy         — buy item: { "itemName": "Bread" }
+ *   POST /api/pve/{userId}/inn/recruit     — recruit hero: { "heroName": "...", "heroClass": "..." }
+ *   POST /api/pve/{userId}/inn/use-item    — use item on hero: { "itemName": "...", "heroIndex": 0 }
  */
 @RestController
 @RequestMapping("/api/pve")
@@ -27,6 +33,8 @@ public class PveCampaignController {
     public PveCampaignController(PveController pveController) {
         this.pveController = pveController;
     }
+
+    // ── Campaign lifecycle ────────────────────────────────────────────────
 
     @PostMapping("/{userId}/start")
     public ResponseEntity<CampaignResponse> startCampaign(
@@ -67,5 +75,78 @@ public class PveCampaignController {
     public ResponseEntity<Void> endCampaign(@PathVariable Long userId) {
         pveController.endCampaign(userId);
         return ResponseEntity.ok().build();
+    }
+
+    /**
+     * POST /api/pve/{userId}/battle/resolve
+     * Body: { "playerWon": true }
+     *
+     * Called by the client after the battle-service reports a battle has ended.
+     * Applies XP and gold rewards (win) or gold penalty + revive (loss) to the party.
+     */
+    @PostMapping("/{userId}/battle/resolve")
+    public ResponseEntity<CampaignResponse> resolveBattle(
+            @PathVariable Long userId,
+            @RequestBody Map<String, Object> body) {
+        boolean playerWon = Boolean.TRUE.equals(body.get("playerWon"));
+        CampaignResponse response = pveController.resolveBattle(userId, playerWon);
+        return response.isSuccess()
+                ? ResponseEntity.ok(response)
+                : ResponseEntity.badRequest().body(response);
+    }
+
+    // ── Inn actions (UC4) ─────────────────────────────────────────────────
+
+    /**
+     * POST /api/pve/{userId}/inn/buy
+     * Body: { "itemName": "Bread" }
+     */
+    @PostMapping("/{userId}/inn/buy")
+    public ResponseEntity<CampaignResponse> buyItem(
+            @PathVariable Long userId,
+            @RequestBody Map<String, String> body) {
+        String itemName = body.get("itemName");
+        if (itemName == null || itemName.isBlank())
+            return ResponseEntity.badRequest().body(CampaignResponse.error("itemName is required."));
+        CampaignResponse response = pveController.buyItem(userId, itemName);
+        return response.isSuccess()
+                ? ResponseEntity.ok(response)
+                : ResponseEntity.badRequest().body(response);
+    }
+
+    /**
+     * POST /api/pve/{userId}/inn/recruit
+     * Body: { "heroName": "Aldric", "heroClass": "WARRIOR" }
+     */
+    @PostMapping("/{userId}/inn/recruit")
+    public ResponseEntity<CampaignResponse> recruitHero(
+            @PathVariable Long userId,
+            @RequestBody Map<String, String> body) {
+        String heroName  = body.get("heroName");
+        String heroClass = body.get("heroClass");
+        if (heroName == null || heroClass == null)
+            return ResponseEntity.badRequest().body(CampaignResponse.error("heroName and heroClass are required."));
+        CampaignResponse response = pveController.recruitHero(userId, heroName, heroClass);
+        return response.isSuccess()
+                ? ResponseEntity.ok(response)
+                : ResponseEntity.badRequest().body(response);
+    }
+
+    /**
+     * POST /api/pve/{userId}/inn/use-item
+     * Body: { "itemName": "Bread", "heroIndex": 0 }
+     */
+    @PostMapping("/{userId}/inn/use-item")
+    public ResponseEntity<CampaignResponse> useItem(
+            @PathVariable Long userId,
+            @RequestBody Map<String, Object> body) {
+        String itemName  = (String) body.get("itemName");
+        Integer heroIndex = body.get("heroIndex") instanceof Number n ? n.intValue() : null;
+        if (itemName == null || heroIndex == null)
+            return ResponseEntity.badRequest().body(CampaignResponse.error("itemName and heroIndex are required."));
+        CampaignResponse response = pveController.useItem(userId, itemName, heroIndex);
+        return response.isSuccess()
+                ? ResponseEntity.ok(response)
+                : ResponseEntity.badRequest().body(response);
     }
 }

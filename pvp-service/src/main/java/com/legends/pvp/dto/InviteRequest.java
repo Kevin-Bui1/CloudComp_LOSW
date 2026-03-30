@@ -1,6 +1,4 @@
 package com.legends.pvp.dto;
 
-public record InviteRequest(
-        int fromUserId,
-        String toUsername
-) {}
+/** Sent by the challenger to create a new PvP invite. */
+public record InviteRequest(String fromUsername, String toUsername) {}

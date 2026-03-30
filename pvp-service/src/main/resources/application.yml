@@ -4,3 +4,11 @@ server:
 spring:
   application:
     name: pvp-service
+
+data:
+  service:
+    url: ${DATA_SERVICE_URL:http://localhost:5003}
+
+battle:
+  service:
+    url: ${BATTLE_SERVICE_URL:http://localhost:5001}

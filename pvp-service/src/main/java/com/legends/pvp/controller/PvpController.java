@@ -1,5 +1,6 @@
 package com.legends.pvp.controller;
 
+import com.legends.pvp.Invite;
 import com.legends.pvp.dto.AcceptInviteRequest;
 import com.legends.pvp.dto.InviteRequest;
 import com.legends.pvp.dto.ResultRequest;
@@ -8,7 +9,16 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
+import java.util.NoSuchElementException;
 
+/**
+ * PvP REST API on port 5004.
+ *
+ * POST /api/pvp/invite              — validate both players and create an invite
+ * POST /api/pvp/accept              — accept invite and choose parties
+ * POST /api/pvp/battle/{inviteId}   — load parties + start battle via battle-service
+ * POST /api/pvp/result              — record win/loss in data-service
+ */
 @RestController
 @RequestMapping("/api/pvp")
 public class PvpController {
@@ -20,31 +30,46 @@ public class PvpController {
     }
 
     @PostMapping("/invite")
-    public ResponseEntity<Map<String, Object>> invite(@RequestBody InviteRequest request) {
-        int inviteId = pvpService.createInvite(request.fromUserId(), request.toUsername());
-        return ResponseEntity.ok(
-                Map.of(
-                        "inviteId", inviteId,
-                        "status", "PENDING"
-                )
-        );
+    public ResponseEntity<?> invite(@RequestBody InviteRequest request) {
+        try {
+            String inviteId = pvpService.createInvite(request.fromUsername(), request.toUsername());
+            return ResponseEntity.ok(Map.of("inviteId", inviteId, "status", "PENDING"));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
     }
 
     @PostMapping("/accept")
     public ResponseEntity<?> accept(@RequestBody AcceptInviteRequest request) {
-        boolean accepted = pvpService.acceptInvite(request.inviteId(), request.toUserId());
-        if (!accepted) {
-            return ResponseEntity.badRequest().body(
-                    Map.of("error", "Invite not found")
-            );
+        try {
+            Invite invite = pvpService.acceptInvite(
+                    request.inviteId(), request.senderParty(), request.receiverParty());
+            return ResponseEntity.ok(Map.of(
+                    "status",         "ACCEPTED",
+                    "senderParty",    invite.getSenderParty(),
+                    "receiverParty",  invite.getReceiverParty()
+            ));
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.notFound().build();
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
-        return ResponseEntity.ok(Map.of("status", "ACCEPTED"));
+    }
+
+    @PostMapping("/battle/{inviteId}")
+    public ResponseEntity<?> startBattle(@PathVariable String inviteId) {
+        try {
+            return ResponseEntity.ok(pvpService.startBattle(inviteId));
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.notFound().build();
+        } catch (IllegalStateException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
     }
 
     @PostMapping("/result")
-    public ResponseEntity<Map<String, Object>> result(@RequestBody ResultRequest request) {
+    public ResponseEntity<?> result(@RequestBody ResultRequest request) {
         return ResponseEntity.ok(
-                pvpService.recordResult(request.winnerUserId(), request.loserUserId())
-        );
+                pvpService.recordResult(request.winnerUsername(), request.loserUsername()));
     }
 }

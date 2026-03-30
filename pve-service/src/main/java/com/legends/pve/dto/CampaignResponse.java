@@ -16,6 +16,7 @@ public class CampaignResponse {
     private List<Enemy> enemies;   // populated only for BATTLE rooms
     private int expReward;
     private int goldReward;
+    private String battleId;       // battle-service session ID for this room
 
     public static CampaignResponse of(Campaign c, String message, String roomType) {
         CampaignResponse r = new CampaignResponse();
@@ -49,4 +50,6 @@ public class CampaignResponse {
     public void setExpReward(int expReward)         { this.expReward = expReward; }
     public int getGoldReward()                      { return goldReward; }
     public void setGoldReward(int goldReward)       { this.goldReward = goldReward; }
+    public String getBattleId()                     { return battleId; }
+    public void setBattleId(String battleId)        { this.battleId = battleId; }
 }

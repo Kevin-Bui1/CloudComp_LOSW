@@ -1,6 +1,4 @@
 package com.legends.pvp.dto;
 
-public record AcceptInviteRequest(
-        int inviteId,
-        int toUserId
-) {}
+/** Sent by the invited player to accept a pending invite and pick their party. */
+public record AcceptInviteRequest(String inviteId, String senderParty, String receiverParty) {}

@@ -1,65 +1,145 @@
 package com.legends.pvp.service;
 
+import com.legends.pvp.Invite;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.HttpClientErrorException;
 
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * PvpService handles the invitation flow for player-vs-player matches.
+ * PvpService — real D1 implementation.
  *
- * For Deliverable 1, this is a stub implementation — the core invitation
- * mechanism works but it doesn't yet integrate with the Data Service (to verify
- * both players have saved parties) or the Battle Service (to actually run the match).
- * That integration is planned for Deliverable 2.
- *
- * How the invite flow works:
- *   1. Player A calls /invite → gets back an inviteId
- *   2. Player A shares that inviteId with Player B (out of band for now)
- *   3. Player B calls /accept with the inviteId → status changes to ACCEPTED
- *   4. After the match, /result records who won
- *
- * AtomicInteger ensures invite IDs are unique even if two requests come in at
- * the same time (thread-safe increment without needing a lock).
+ * Invite flow:
+ *   1. createInvite  — validates both players exist + have parties (data-service)
+ *   2. acceptInvite  — receiver picks their party
+ *   3. startBattle   — loads parties from data-service, sends to battle-service
+ *   4. recordResult  — posts win/loss to data-service
  */
 @Service
 public class PvpService {
 
-    private final AtomicInteger inviteCounter = new AtomicInteger(1);
-    private final Map<Integer, String> invites = new ConcurrentHashMap<>();
+    private final RestTemplate restTemplate = new RestTemplate();
 
-    /**
-     * Creates a new invite and returns its ID.
-     * The invite starts as PENDING until the other player accepts.
-     */
-    public int createInvite(int fromUserId, String toUsername) {
-        int inviteId = inviteCounter.getAndIncrement();
-        invites.put(inviteId, "PENDING");
+    @Value("${data.service.url:http://localhost:5003}")
+    private String dataServiceUrl;
+
+    @Value("${battle.service.url:http://localhost:5001}")
+    private String battleServiceUrl;
+
+    private final Map<String, Invite> pendingInvites = new ConcurrentHashMap<>();
+    private final AtomicInteger       idCounter      = new AtomicInteger(1);
+
+    // ── 1. Create invite ────────────────────────────────────────────────
+    public String createInvite(String fromUsername, String toUsername) {
+        if (fromUsername == null || fromUsername.isBlank())
+            throw new IllegalArgumentException("Sender username is required.");
+        if (toUsername == null || toUsername.isBlank())
+            throw new IllegalArgumentException("Recipient username is required.");
+        if (fromUsername.equalsIgnoreCase(toUsername))
+            throw new IllegalArgumentException("You cannot invite yourself.");
+
+        checkPlayerEligible(fromUsername);
+        checkPlayerEligible(toUsername);
+
+        String inviteId = String.valueOf(idCounter.getAndIncrement());
+        pendingInvites.put(inviteId, new Invite(fromUsername, toUsername));
         return inviteId;
     }
 
-    /**
-     * Accepts an invite if it exists. Returns false if the inviteId is not found,
-     * which triggers a 400 Bad Request from the controller.
-     */
-    public boolean acceptInvite(int inviteId, int toUserId) {
-        if (!invites.containsKey(inviteId)) {
-            return false;
-        }
-        invites.put(inviteId, "ACCEPTED");
-        return true;
+    // ── 2. Accept invite ────────────────────────────────────────────────
+    public Invite acceptInvite(String inviteId, String senderParty, String receiverParty) {
+        Invite invite = getInviteOrThrow(inviteId);
+        if (senderParty == null || senderParty.isBlank())
+            throw new IllegalArgumentException("Sender must choose a party.");
+        if (receiverParty == null || receiverParty.isBlank())
+            throw new IllegalArgumentException("Receiver must choose a party.");
+        invite.setSenderParty(senderParty);
+        invite.setReceiverParty(receiverParty);
+        invite.accept();
+        return invite;
     }
 
-    /**
-     * Records the outcome of a completed PvP match.
-     * In D2 this will update the league table in the database.
-     */
-    public Map<String, Object> recordResult(int winnerUserId, int loserUserId) {
-        return Map.of(
-                "status", "RECORDED",
-                "winnerUserId", winnerUserId,
-                "loserUserId", loserUserId
+    // ── 3. Start battle ─────────────────────────────────────────────────
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> startBattle(String inviteId) {
+        Invite invite = getInviteOrThrow(inviteId);
+        if (!invite.isAccepted())
+            throw new IllegalStateException("Invite has not been accepted yet.");
+
+        List<?> senderHeroes   = loadPartyHeroes(invite.getSenderUsername(),   invite.getSenderParty());
+        List<?> receiverHeroes = loadPartyHeroes(invite.getReceiverUsername(), invite.getReceiverParty());
+
+        if (senderHeroes.isEmpty())
+            throw new IllegalStateException(invite.getSenderUsername() + "'s party has no heroes.");
+        if (receiverHeroes.isEmpty())
+            throw new IllegalStateException(invite.getReceiverUsername() + "'s party has no heroes.");
+
+        String battleId = "pvp-" + inviteId;
+        Map<String, Object> battleRequest = new HashMap<>();
+        battleRequest.put("playerUnits", senderHeroes);
+        battleRequest.put("enemyUnits",  receiverHeroes);
+        battleRequest.put("playerLabel", invite.getSenderUsername());
+        battleRequest.put("enemyLabel",  invite.getReceiverUsername());
+
+        Map<String, Object> response = restTemplate.postForObject(
+                battleServiceUrl + "/api/battle/" + battleId + "/start",
+                battleRequest,
+                Map.class
         );
+        return response != null ? response : Map.of("error", "No response from battle-service.");
+    }
+
+    // ── 4. Record result ────────────────────────────────────────────────
+    public Map<String, Object> recordResult(String winnerUsername, String loserUsername) {
+        try {
+            Map<String, String> body = new HashMap<>();
+            body.put("winnerUsername", winnerUsername);
+            body.put("loserUsername",  loserUsername);
+            restTemplate.postForObject(dataServiceUrl + "/api/data/pvp/result", body, Void.class);
+        } catch (Exception e) {
+            System.err.println("Warning: could not record PvP result: " + e.getMessage());
+        }
+        Map<String, Object> result = new HashMap<>();
+        result.put("status",         "RECORDED");
+        result.put("winnerUsername", winnerUsername);
+        result.put("loserUsername",  loserUsername);
+        return result;
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────────
+    private void checkPlayerEligible(String username) {
+        try {
+            Map<?, ?> response = restTemplate.getForObject(
+                    dataServiceUrl + "/api/data/players/" + username + "/eligible",
+                    Map.class
+            );
+            if (response == null || !Boolean.TRUE.equals(response.get("eligible")))
+                throw new IllegalArgumentException("Player '" + username + "' not found or has no saved parties.");
+        } catch (HttpClientErrorException.NotFound e) {
+            throw new IllegalArgumentException("Player '" + username + "' not found or has no saved parties.");
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<?> loadPartyHeroes(String username, String partyName) {
+        try {
+            List<?> heroes = restTemplate.getForObject(
+                    dataServiceUrl + "/api/data/players/" + username + "/parties/" + partyName + "/heroes",
+                    List.class
+            );
+            return heroes != null ? heroes : List.of();
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not load party '" + partyName + "' for '" + username + "': " + e.getMessage());
+        }
+    }
+
+    private Invite getInviteOrThrow(String inviteId) {
+        Invite invite = pendingInvites.get(inviteId);
+        if (invite == null) throw new NoSuchElementException("Invite '" + inviteId + "' not found.");
+        return invite;
     }
 }
