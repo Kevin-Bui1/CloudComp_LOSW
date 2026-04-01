@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Legends of Sword and Wand</title>
+<style>
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --border:   #30363d;
+    --accent:   #c9a84c;
+    --accent2:  #7c5cbf;
+    --text:     #e6edf3;
+    --muted:    #8b949e;
+    --danger:   #f85149;
+    --success:  #3fb950;
+    --hp:       #3fb950;
+    --mana:     #58a6ff;
+    --enemy:    #f85149;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
+
+  /* ── Screens ── */
+  .screen { display: none; padding: 24px; max-width: 960px; margin: 0 auto; }
+  .screen.active { display: block; }
+
+  /* ── Common UI ── */
+  h1 { color: var(--accent); font-size: 2rem; margin-bottom: 8px; }
+  h2 { color: var(--accent); font-size: 1.3rem; margin-bottom: 12px; }
+  h3 { font-size: 1rem; color: var(--muted); margin-bottom: 8px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .col { flex: 1; min-width: 200px; }
+  button { background: var(--accent2); color: #fff; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer; font-size: 0.9rem; transition: opacity .15s; }
+  button:hover { opacity: 0.85; }
+  button.danger { background: var(--danger); }
+  button.secondary { background: var(--border); color: var(--text); }
+  button.gold { background: var(--accent); color: #000; font-weight: 600; }
+  input, select { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 8px 12px; font-size: 0.9rem; width: 100%; }
+  input:focus, select:focus { outline: 1px solid var(--accent); }
+  label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; margin-top: 10px; }
+  .msg { padding: 10px 14px; border-radius: 6px; font-size: 0.9rem; margin-top: 10px; }
+  .msg.error   { background: #2d0f0f; border: 1px solid var(--danger); color: var(--danger); }
+  .msg.success { background: #0f2d14; border: 1px solid var(--success); color: var(--success); }
+  .msg.info    { background: #0f1d2d; border: 1px solid var(--muted); color: var(--text); }
+  .divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+
+  /* ── Health / Mana bars ── */
+  .bar-wrap { background: var(--border); border-radius: 4px; height: 8px; margin-top: 4px; overflow: hidden; }
+  .bar { height: 100%; border-radius: 4px; transition: width .3s; }
+  .bar.hp   { background: var(--hp); }
+  .bar.mana { background: var(--mana); }
+  .bar.enemy-hp { background: var(--enemy); }
+  .stat-row { display: flex; justify-content: space-between; font-size: 0.82rem; color: var(--muted); margin-top: 2px; }
+
+  /* ── Hero card ── */
+  .hero-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-width: 160px; }
+  .hero-card .name { font-weight: 600; color: var(--accent); }
+  .hero-card .class-badge { font-size: 0.75rem; background: var(--accent2); color: #fff; border-radius: 4px; padding: 1px 6px; margin-left: 6px; }
+  .hero-card.dead { opacity: 0.4; }
+
+  /* ── Battle log ── */
+  #battle-log { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; height: 180px; overflow-y: auto; padding: 10px; font-size: 0.85rem; font-family: monospace; }
+  #battle-log .player-action { color: var(--success); }
+  #battle-log .enemy-action  { color: var(--enemy); }
+  #battle-log .system-msg    { color: var(--accent); }
+
+  /* ── Turn indicator ── */
+  .turn-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: 600; }
+  .turn-badge.player { background: #0f2d14; color: var(--success); border: 1px solid var(--success); }
+  .turn-badge.enemy  { background: #2d0f0f; color: var(--enemy);   border: 1px solid var(--enemy); }
+
+  /* ── Nav bar ── */
+  #nav { display: none; background: var(--surface); border-bottom: 1px solid var(--border); padding: 10px 24px; }
+  #nav.visible { display: flex; align-items: center; gap: 16px; }
+  #nav .brand { color: var(--accent); font-weight: 700; font-size: 1.1rem; flex: 1; }
+  #nav .user-info { color: var(--muted); font-size: 0.85rem; }
+  #nav button { padding: 5px 12px; font-size: 0.82rem; }
+</style>
+</head>
+<body>
+
+<!-- ── Navigation bar ── -->
+<div id="nav">
+  <span class="brand">⚔ Legends of Sword and Wand</span>
+  <span class="user-info" id="nav-user"></span>
+  <button class="secondary" onclick="goTo('dashboard')">Dashboard</button>
+  <button class="danger"    onclick="logout()">Logout</button>
+</div>
+
+<!-- ════════════════════════════════ LOGIN SCREEN ════════════════════════════════ -->
+<div id="screen-login" class="screen active">
+  <h1>⚔ Legends of Sword and Wand</h1>
+  <p style="color:var(--muted);margin-bottom:20px">A dungeon RPG. Register or log in to begin.</p>
+  <div class="card" style="max-width:380px">
+    <label>Username</label>
+    <input id="login-user" type="text" placeholder="heroPlayer" autocomplete="username">
+    <label>Password</label>
+    <input id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password">
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button onclick="doLogin()">Login</button>
+      <button class="secondary" onclick="doRegister()">Register</button>
+    </div>
+    <div id="login-msg"></div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════ DASHBOARD ════════════════════════════════ -->
+<div id="screen-dashboard" class="screen">
+  <h1>Dashboard</h1>
+  <div class="row">
+    <div class="col card">
+      <h2>👤 Profile</h2>
+      <div id="profile-info"></div>
+    </div>
+    <div class="col card">
+      <h2>📜 Saved Parties</h2>
+      <div id="saved-parties"></div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <div class="card col">
+      <h2>⚔ PvE Campaign</h2>
+      <p style="color:var(--muted);font-size:.9rem;margin-bottom:12px">Explore 30 dungeon rooms, fight monsters and visit inns.</p>
+      <button class="gold" onclick="goTo('pve-setup')">New Campaign</button>
+      <button class="secondary" style="margin-left:8px" onclick="loadContinuePve()">Continue Campaign</button>
+      <div id="continue-list" style="margin-top:10px"></div>
+    </div>
+    <div class="card col">
+      <h2>⚔ PvP Battle</h2>
+      <p style="color:var(--muted);font-size:.9rem;margin-bottom:12px">Challenge another player using your saved parties.</p>
+      <div>
+        <label>Opponent username</label>
+        <input id="pvp-opponent" placeholder="opponentName">
+      </div>
+      <button class="gold" style="margin-top:10px" onclick="sendPvpInvite()">Send Invite</button>
+      <div id="pvp-msg"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════ PVE SETUP ════════════════════════════════ -->
+<div id="screen-pve-setup" class="screen">
+  <h1>New Campaign</h1>
+  <div class="card" style="max-width:460px">
+    <h2>Choose Your Starting Hero</h2>
+    <label>Hero Name</label>
+    <input id="hero-name" placeholder="e.g. Aldric" value="Aldric">
+    <label>Class</label>
+    <select id="hero-class">
+      <option value="WARRIOR">Warrior — balanced fighter</option>
+      <option value="MAGE">Mage — high mana, lower HP</option>
+      <option value="ORDER">Order — defensive tank</option>
+      <option value="CHAOS">Chaos — high attack, glass cannon</option>
+    </select>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="gold" onclick="startPve()">Start Campaign</button>
+      <button class="secondary" onclick="goTo('dashboard')">Back</button>
+    </div>
+    <div id="pve-setup-msg"></div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════ PVE CAMPAIGN ════════════════════════════════ -->
+<div id="screen-pve" class="screen">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <h1>Campaign</h1>
+    <div style="display:flex;gap:8px">
+      <button onclick="openInventory()" class="secondary">🎒 Inventory</button>
+      <button onclick="saveAndExit()" class="secondary">💾 Save &amp; Exit</button>
+    </div>
+  </div>
+
+  <!-- Status bar -->
+  <div class="card" style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">
+    <span>🏰 Room <strong id="room-num">0</strong>/30</span>
+    <span>💰 <strong id="gold-amt">0</strong>g</span>
+    <span id="pve-room-type" style="font-size:.85rem;color:var(--muted)"></span>
+    <span id="pve-msg-inline" style="font-size:.85rem;color:var(--accent)"></span>
+  </div>
+
+  <!-- Party -->
+  <div class="card">
+    <h2>Your Party</h2>
+    <div id="party-cards" class="row"></div>
+  </div>
+
+  <!-- Room content -->
+  <div id="room-content"></div>
+
+  <!-- Next room button (shown between rooms) -->
+  <div id="next-room-btn" style="margin-top:12px">
+    <button class="gold" onclick="nextRoom()">Next Room →</button>
+  </div>
+
+  <!-- Inventory modal -->
+  <div id="inventory-modal" style="display:none" class="card">
+    <h2>🎒 Inventory</h2>
+    <div id="inventory-list"></div>
+    <button class="secondary" style="margin-top:10px" onclick="closeInventory()">Close</button>
+  </div>
+</div>
+
+<!-- ════════════════════════════════ BATTLE SCREEN ════════════════════════════════ -->
+<div id="screen-battle" class="screen">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <h1>⚔ Battle</h1>
+    <span id="turn-indicator"></span>
+  </div>
+  <div class="row">
+    <div class="col card">
+      <h3>Your Party</h3>
+      <div id="player-units"></div>
+    </div>
+    <div class="col card">
+      <h3>Enemies</h3>
+      <div id="enemy-units"></div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:12px">
+    <h3>Battle Log</h3>
+    <div id="battle-log"></div>
+  </div>
+  <div id="battle-actions" style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+    <button class="gold"      onclick="battleAction('ATTACK')">⚔ Attack</button>
+    <button class="secondary" onclick="battleAction('DEFEND')">🛡 Defend</button>
+    <button class="secondary" onclick="battleAction('CAST')">✨ Cast</button>
+    <button class="secondary" onclick="battleAction('WAIT')">⏳ Wait</button>
+  </div>
+  <div id="battle-msg" style="margin-top:10px"></div>
+</div>
+
+<!-- ════════════════════════════════ INN SCREEN ════════════════════════════════ -->
+<div id="screen-inn" class="screen">
+  <h1>🏠 The Inn</h1>
+  <div id="inn-heal-log" class="card" style="color:var(--success);font-size:.9rem;white-space:pre-line"></div>
+  <div class="row" style="margin-top:12px">
+    <!-- Shop -->
+    <div class="col card">
+      <h2>🛒 Shop</h2>
+      <div id="inn-shop"></div>
+    </div>
+    <!-- Recruits -->
+    <div class="col card">
+      <h2>🧑‍🤝‍🧑 Recruits</h2>
+      <div id="inn-recruits"></div>
+    </div>
+  </div>
+  <div id="inn-msg" style="margin-top:8px"></div>
+  <button class="gold" style="margin-top:14px" onclick="leaveInn()">Leave Inn →</button>
+</div>
+
+<!-- ════════════════════════════════ PVP ACCEPT SCREEN ════════════════════════════════ -->
+<div id="screen-pvp-accept" class="screen">
+  <h1>PvP Invite</h1>
+  <div class="card" style="max-width:460px">
+    <p style="color:var(--muted);margin-bottom:12px">An invite was created. Share the invite ID with your opponent and choose parties to proceed.</p>
+    <div id="pvp-invite-details"></div>
+    <label style="margin-top:14px">Your Party Name</label>
+    <input id="pvp-sender-party" placeholder="e.g. Fellowship">
+    <label>Opponent Party Name</label>
+    <input id="pvp-receiver-party" placeholder="e.g. DarkLords">
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="gold" onclick="acceptPvpInvite()">Accept &amp; Choose Parties</button>
+      <button class="secondary" onclick="goTo('dashboard')">Cancel</button>
+    </div>
+    <div id="pvp-accept-msg"></div>
+  </div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════════════════════════
+// Configuration
+// ════════════════════════════════════════════════════════════════════════════
+const API = '';          // empty = same origin via gateway; set to 'http://localhost:8080' for local dev
+
+// ── State ──────────────────────────────────────────────────────────────────
+let state = {
+  userId:   null,
+  username: null,
+  token:    null,        // reserved for future JWT auth
+  battleId: null,
+  pendingInviteId: null,
+  currentBattleRewards: null,
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// Utility
+// ════════════════════════════════════════════════════════════════════════════
+async function api(method, path, body) {
+  const opts = {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+  };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const res = await fetch(API + path, opts);
+  const text = await res.text();
+  let json;
+  try { json = JSON.parse(text); } catch { json = text; }
+  return { ok: res.ok, status: res.status, data: json };
+}
+
+function showMsg(id, text, type = 'info') {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.innerHTML = `<div class="msg ${type}">${text}</div>`;
+}
+
+function clearMsg(id) {
+  const el = document.getElementById(id);
+  if (el) el.innerHTML = '';
+}
+
+function goTo(screenId) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById('screen-' + screenId).classList.add('active');
+}
+
+function logBattle(msg, cls = '') {
+  const log = document.getElementById('battle-log');
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = msg;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+function pct(val, max) { return max > 0 ? Math.round((val / max) * 100) : 0; }
+
+function renderBar(val, max, barClass) {
+  return `<div class="bar-wrap"><div class="bar ${barClass}" style="width:${pct(val,max)}%"></div></div>
+          <div class="stat-row"><span>${val}/${max}</span></div>`;
+}
+
+function renderHeroCard(h, idx, isDead) {
+  return `<div class="hero-card ${isDead ? 'dead' : ''}" id="hero-card-${idx}">
+    <div><span class="name">${h.name}</span><span class="class-badge">${h.heroClass || h.heroclass || ''}</span></div>
+    <div style="font-size:.78rem;color:var(--muted)">Lv ${h.level} | ATK ${h.attack} DEF ${h.defense}</div>
+    <div style="margin-top:6px;font-size:.78rem">HP</div>
+    ${renderBar(h.hp, h.maxHp, 'hp')}
+    <div style="margin-top:4px;font-size:.78rem">Mana</div>
+    ${renderBar(h.mana, h.maxMana, 'mana')}
+  </div>`;
+}
+
+function renderEnemyCard(e, idx) {
+  const dead = e.hp <= 0;
+  return `<div class="hero-card ${dead ? 'dead' : ''}" id="enemy-card-${idx}">
+    <div><span class="name" style="color:var(--enemy)">${e.name}</span></div>
+    <div style="font-size:.78rem;color:var(--muted)">Lv ${e.level} | ATK ${e.attack} DEF ${e.defense}</div>
+    <div style="margin-top:6px;font-size:.78rem">HP</div>
+    ${renderBar(e.hp, e.maxHp, 'enemy-hp')}
+  </div>`;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Auth  (US1)
+// ════════════════════════════════════════════════════════════════════════════
+async function doRegister() {
+  const u = document.getElementById('login-user').value.trim();
+  const p = document.getElementById('login-pass').value;
+  if (!u || !p) return showMsg('login-msg', 'Please fill in both fields.', 'error');
+  const r = await api('POST', '/api/profile/register', { username: u, password: p });
+  if (r.ok && r.data.success) {
+    showMsg('login-msg', 'Registered! You can now log in.', 'success');
+  } else {
+    showMsg('login-msg', r.data.message || 'Registration failed.', 'error');
+  }
+}
+
+async function doLogin() {
+  const u = document.getElementById('login-user').value.trim();
+  const p = document.getElementById('login-pass').value;
+  if (!u || !p) return showMsg('login-msg', 'Please fill in both fields.', 'error');
+  const r = await api('POST', '/api/profile/login', { username: u, password: p });
+  if (r.ok && r.data.success) {
+    state.userId   = r.data.userId;
+    state.username = r.data.username;
+    document.getElementById('nav').classList.add('visible');
+    document.getElementById('nav-user').textContent = `👤 ${u}`;
+    await loadDashboard();
+    goTo('dashboard');
+  } else {
+    showMsg('login-msg', r.data.message || 'Login failed.', 'error');
+  }
+}
+
+function logout() {
+  state = { userId: null, username: null, token: null, battleId: null, pendingInviteId: null };
+  document.getElementById('nav').classList.remove('visible');
+  goTo('login');
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Dashboard (US1 — profile view)
+// ════════════════════════════════════════════════════════════════════════════
+async function loadDashboard() {
+  const r = await api('GET', `/api/profile/${state.userId}`);
+  if (r.ok) {
+    const d = r.data;
+    document.getElementById('profile-info').innerHTML = `
+      <p>👤 <strong>${d.username}</strong></p>
+      <p style="margin-top:6px;color:var(--muted)">Best Score: <strong style="color:var(--accent)">${d.scores}</strong></p>
+      <p style="color:var(--muted)">Campaign Progress: Room <strong>${d.campaignProgress}</strong></p>`;
+  }
+
+  const pr = await api('GET', `/api/data/parties/${state.userId}`);
+  const partiesEl = document.getElementById('saved-parties');
+  if (pr.ok && pr.data.length > 0) {
+    partiesEl.innerHTML = pr.data.map(p =>
+      `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:.9rem">
+         ⚔ <strong>${p.partyName}</strong>
+         <span style="color:var(--muted);margin-left:8px">Room ${p.currentRoom}/30 · ${p.gold}g</span>
+       </div>`
+    ).join('');
+  } else {
+    partiesEl.innerHTML = '<p style="color:var(--muted);font-size:.9rem">No saved parties yet.</p>';
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PvE — start (US2)
+// ════════════════════════════════════════════════════════════════════════════
+async function startPve() {
+  const name      = document.getElementById('hero-name').value.trim() || 'Hero';
+  const heroClass = document.getElementById('hero-class').value;
+  const r = await api('POST', `/api/pve/${state.userId}/start`, [
+    { name, heroClass, level: 1, attack: 5, defense: 5, hp: 100, maxHp: 100, mana: 50, maxMana: 50 }
+  ]);
+  if (r.ok) {
+    renderCampaign(r.data);
+    goTo('pve');
+  } else {
+    showMsg('pve-setup-msg', r.data.message || 'Could not start campaign.', 'error');
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PvE — continue (US6)
+// ════════════════════════════════════════════════════════════════════════════
+async function loadContinuePve() {
+  const r = await api('GET', `/api/data/campaign/${state.userId}`);
+  const el = document.getElementById('continue-list');
+  if (r.ok && r.data) {
+    el.innerHTML = `
+      <div style="margin-top:8px;font-size:.9rem;color:var(--muted)">
+        Saved: <strong style="color:var(--text)">${r.data.partyName}</strong> · Room ${r.data.currentRoom}/30 · ${r.data.gold}g
+      </div>
+      <button class="secondary" style="margin-top:8px" onclick="continuePve()">Continue This Campaign</button>`;
+  } else {
+    el.innerHTML = '<p style="font-size:.85rem;color:var(--muted)">No saved campaign found.</p>';
+  }
+}
+
+async function continuePve() {
+  const r = await api('GET', `/api/data/campaign/${state.userId}`);
+  if (!r.ok || !r.data) return;
+  const saved = r.data;
+  const restoreR = await api('POST', `/api/pve/${state.userId}/restore`, {
+    currentRoom: saved.currentRoom,
+    gold:        saved.gold,
+    heroes:      saved.heroes,
+  });
+  if (restoreR.ok) {
+    renderCampaign(restoreR.data);
+    goTo('pve');
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PvE — campaign view rendering
+// ════════════════════════════════════════════════════════════════════════════
+function renderCampaign(data) {
+  document.getElementById('room-num').textContent  = data.currentRoom || 0;
+  document.getElementById('gold-amt').textContent  = data.gold        || 0;
+  document.getElementById('pve-room-type').textContent = '';
+  document.getElementById('pve-msg-inline').textContent = data.message || '';
+  document.getElementById('next-room-btn').style.display = 'block';
+  document.getElementById('room-content').innerHTML = '';
+  document.getElementById('inventory-modal').style.display = 'none';
+
+  // Party cards
+  const partyEl = document.getElementById('party-cards');
+  if (data.heroes && data.heroes.length) {
+    partyEl.innerHTML = data.heroes.map((h, i) => renderHeroCard(h, i, h.hp <= 0)).join('');
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PvE — next room (US2/3/4)
+// ════════════════════════════════════════════════════════════════════════════
+async function nextRoom() {
+  const r = await api('POST', `/api/pve/${state.userId}/next-room`);
+  if (!r.ok) {
+    document.getElementById('pve-msg-inline').textContent = r.data.message || 'Error.';
+    return;
+  }
+  const data = r.data;
+  document.getElementById('room-num').textContent  = data.currentRoom;
+  document.getElementById('gold-amt').textContent  = data.gold;
+  document.getElementById('pve-msg-inline').textContent = '';
+  document.getElementById('next-room-btn').style.display = 'none';
+
+  if (data.roomType === 'BATTLE') {
+    document.getElementById('pve-room-type').textContent = '⚔ Battle Room';
+    state.battleId = data.battleId;
+    state.currentBattleRewards = { expReward: data.expReward, goldReward: data.goldReward };
+    enterBattle(data.enemies, data.heroes || []);
+  } else if (data.roomType === 'INN') {
+    document.getElementById('pve-room-type').textContent = '🏠 Inn Room';
+    enterInn(data.message, data.heroes || []);
+  } else {
+    document.getElementById('pve-msg-inline').textContent = data.message;
+    document.getElementById('next-room-btn').style.display = 'block';
+  }
+
+  // Check campaign complete
+  if (data.currentRoom >= 30) {
+    const scoreR = await api('GET', `/api/pve/${state.userId}/score`);
+    const score  = scoreR.ok ? scoreR.data : 0;
+    await api('POST', `/api/data/scores/${state.userId}`, { score, username: state.username });
+    await api('PATCH', `/api/profile/${state.userId}/stats?newScore=${score}&ranking=0`);
+    await api('POST', `/api/pve/${state.userId}/end`);
+    document.getElementById('pve-msg-inline').textContent =
+        `🎉 Campaign complete! Final score: ${score}`;
+    document.getElementById('next-room-btn').style.display = 'none';
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Battle (US3) — called from within PvE
+// ════════════════════════════════════════════════════════════════════════════
+let battleState = { playerUnits: [], enemyUnits: [], currentTurn: 'player', over: false };
+
+function enterBattle(enemies, heroes) {
+  battleState = {
+    playerUnits: heroes.map(h => ({ ...h })),
+    enemyUnits:  enemies.map(e => ({ ...e })),
+    currentTurn: 'player',
+    over:        false,
+  };
+  document.getElementById('battle-log').innerHTML = '';
+  logBattle('⚔ A battle begins!', 'system-msg');
+  renderBattleUnits();
+  goTo('battle');
+}
+
+function renderBattleUnits() {
+  document.getElementById('player-units').innerHTML =
+    battleState.playerUnits.map((h, i) => renderHeroCard(h, i, h.hp <= 0)).join('');
+  document.getElementById('enemy-units').innerHTML =
+    battleState.enemyUnits.map((e, i) => renderEnemyCard(e, i)).join('');
+
+  const isPlayerTurn = battleState.currentTurn === 'player';
+  document.getElementById('turn-indicator').innerHTML =
+    `<span class="turn-badge ${isPlayerTurn ? 'player' : 'enemy'}">${isPlayerTurn ? 'Your Turn' : 'Enemy Turn'}</span>`;
+  document.getElementById('battle-actions').style.display = isPlayerTurn ? 'flex' : 'none';
+}
+
+async function battleAction(action) {
+  if (battleState.over) return;
+  if (!state.battleId) {
+    // Fallback: run battle logic client-side if battle-service unreachable
+    runLocalBattleTurn(action);
+    return;
+  }
+
+  const r = await api('POST', `/api/battle/${state.battleId}/action?action=${action}`);
+  if (!r.ok) {
+    showMsg('battle-msg', r.data.message || 'Action failed.', 'error');
+    return;
+  }
+
+  const bd = r.data;
+  // Update unit states from response
+  if (bd.playerUnits) bd.playerUnits.forEach((u, i) => { if (battleState.playerUnits[i]) Object.assign(battleState.playerUnits[i], u); });
+  if (bd.enemyUnits)  bd.enemyUnits.forEach((u, i)  => { if (battleState.enemyUnits[i])  Object.assign(battleState.enemyUnits[i], u); });
+  if (bd.log)         bd.log.forEach(l => logBattle(l, l.includes('→') ? 'player-action' : 'enemy-action'));
+  battleState.currentTurn = bd.currentTurn || 'player';
+  renderBattleUnits();
+
+  if (bd.battleOver) {
+    await endBattle(bd.winner === 'player');
+  }
+}
+
+// ── Client-side battle fallback (used when battle-service is down) ──────────
+function runLocalBattleTurn(action) {
+  const living = (units) => units.filter(u => u.hp > 0);
+  const hero   = living(battleState.playerUnits)[0];
+  const enemy  = living(battleState.enemyUnits)[0];
+  if (!hero || !enemy) { endBattle(living(battleState.playerUnits).length > 0); return; }
+
+  if (action === 'ATTACK') {
+    const dmg = Math.max(0, hero.attack - enemy.defense);
+    enemy.hp  = Math.max(0, enemy.hp - dmg);
+    logBattle(`${hero.name} → ATTACK → ${enemy.name} (-${dmg} HP)`, 'player-action');
+  } else if (action === 'DEFEND') {
+    hero.hp   = Math.min(hero.maxHp, hero.hp + 10);
+    hero.mana = Math.min(hero.maxMana, hero.mana + 5);
+    logBattle(`${hero.name} → DEFEND (+10 HP, +5 Mana)`, 'player-action');
+  } else if (action === 'WAIT') {
+    logBattle(`${hero.name} → WAIT`, 'player-action');
+  } else if (action === 'CAST') {
+    const manaCost = 20;
+    if (hero.mana >= manaCost) {
+      const dmg = Math.max(0, hero.attack * 2 - enemy.defense);
+      enemy.hp  = Math.max(0, enemy.hp - dmg);
+      hero.mana -= manaCost;
+      logBattle(`${hero.name} → CAST ABILITY → ${enemy.name} (-${dmg} HP)`, 'player-action');
+    } else {
+      logBattle(`${hero.name} → Not enough mana!`, 'system-msg');
+    }
+  }
+
+  // Enemy counter-attack
+  if (enemy.hp > 0) {
+    const dmg = Math.max(0, enemy.attack - hero.defense);
+    hero.hp   = Math.max(0, hero.hp - dmg);
+    logBattle(`${enemy.name} → ATTACK → ${hero.name} (-${dmg} HP)`, 'enemy-action');
+  }
+
+  renderBattleUnits();
+
+  const playerAlive = battleState.playerUnits.some(u => u.hp > 0);
+  const enemyAlive  = battleState.enemyUnits.some(u => u.hp > 0);
+  if (!enemyAlive || !playerAlive) endBattle(playerAlive);
+}
+
+async function endBattle(playerWon) {
+  battleState.over = true;
+  document.getElementById('battle-actions').style.display = 'none';
+
+  if (playerWon) {
+    logBattle('🏆 Victory!', 'system-msg');
+  } else {
+    logBattle('💀 Defeated — heroes revived at 1 HP.', 'system-msg');
+  }
+
+  // Tell pve-service to apply rewards
+  const r = await api('POST', `/api/pve/${state.userId}/battle/resolve`, { playerWon });
+  const msg = r.ok ? r.data.message : (playerWon ? 'Victory!' : 'Defeated.');
+  showMsg('battle-msg', msg, playerWon ? 'success' : 'error');
+
+  // Update party gold display
+  if (r.ok) {
+    document.getElementById('gold-amt').textContent = r.data.gold || 0;
+  }
+
+  // Return to campaign view after 2 seconds
+  setTimeout(() => {
+    clearMsg('battle-msg');
+    goTo('pve');
+    document.getElementById('next-room-btn').style.display = 'block';
+    document.getElementById('pve-msg-inline').textContent  = msg;
+  }, 2000);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Inn (US4)
+// ════════════════════════════════════════════════════════════════════════════
+let innState = { recruits: [] };
+
+function enterInn(message, heroes) {
+  document.getElementById('inn-heal-log').textContent = message;
+  innState.recruits = [
+    { name: 'Aldric', heroClass: 'WARRIOR' },
+    { name: 'Syra',   heroClass: 'MAGE'    },
+  ];
+  renderInnShop();
+  renderInnRecruits(heroes.length);
+  goTo('inn');
+}
+
+function renderInnShop() {
+  const items = [
+    { name: 'Bread',       cost: 200, desc: '+20 HP' },
+    { name: 'Potion',      cost: 350, desc: '+50 HP' },
+    { name: 'Elixir',      cost: 500, desc: '+80 HP, +40 Mana' },
+    { name: 'Power Shard', cost: 400, desc: '+10 ATK' },
+    { name: 'Iron Shield', cost: 400, desc: '+8 DEF' },
+  ];
+  document.getElementById('inn-shop').innerHTML = items.map(item =>
+    `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
+       <div>
+         <strong>${item.name}</strong>
+         <span style="font-size:.8rem;color:var(--muted);margin-left:8px">${item.desc}</span>
+       </div>
+       <button class="gold" style="padding:4px 10px;font-size:.8rem" onclick="buyItem('${item.name}',${item.cost})">
+         ${item.cost}g
+       </button>
+     </div>`
+  ).join('');
+}
+
+function renderInnRecruits(partySize) {
+  document.getElementById('inn-recruits').innerHTML = innState.recruits.map(r =>
+    `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
+       <div>
+         <strong>${r.name}</strong>
+         <span class="class-badge" style="background:var(--accent2);color:#fff;border-radius:4px;padding:1px 6px;font-size:.75rem;margin-left:6px">${r.heroClass}</span>
+       </div>
+       <button class="secondary" style="padding:4px 10px;font-size:.8rem" onclick="recruitHero('${r.name}','${r.heroClass}')" ${partySize >= 5 ? 'disabled' : ''}>
+         Recruit
+       </button>
+     </div>`
+  ).join('');
+}
+
+async function buyItem(itemName) {
+  const r = await api('POST', `/api/pve/${state.userId}/inn/buy`, { itemName });
+  showMsg('inn-msg', r.data.message || (r.ok ? 'Bought!' : 'Failed.'), r.ok ? 'success' : 'error');
+  if (r.ok) document.getElementById('gold-amt').textContent = r.data.gold || 0;
+}
+
+async function recruitHero(heroName, heroClass) {
+  const r = await api('POST', `/api/pve/${state.userId}/inn/recruit`, { heroName, heroClass });
+  showMsg('inn-msg', r.data.message || (r.ok ? 'Recruited!' : 'Failed.'), r.ok ? 'success' : 'error');
+}
+
+function leaveInn() {
+  clearMsg('inn-msg');
+  goTo('pve');
+  document.getElementById('next-room-btn').style.display = 'block';
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Inventory (US4 — use items)
+// ════════════════════════════════════════════════════════════════════════════
+async function openInventory() {
+  const r = await api('GET', `/api/pve/${state.userId}/campaign`);
+  const modal = document.getElementById('inventory-modal');
+  if (!r.ok || !r.data.inventory) {
+    document.getElementById('inventory-list').innerHTML = '<p style="color:var(--muted)">Inventory empty.</p>';
+  } else {
+    const inv = r.data.inventory;
+    const keys = Object.keys(inv).filter(k => inv[k] > 0);
+    if (keys.length === 0) {
+      document.getElementById('inventory-list').innerHTML = '<p style="color:var(--muted)">Inventory empty.</p>';
+    } else {
+      document.getElementById('inventory-list').innerHTML = keys.map(k =>
+        `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">
+           <span><strong>${k}</strong> × ${inv[k]}</span>
+           <button class="secondary" style="padding:4px 10px;font-size:.8rem" onclick="useItemOnHero('${k}')">Use</button>
+         </div>`
+      ).join('');
+    }
+  }
+  modal.style.display = 'block';
+}
+
+async function useItemOnHero(itemName) {
+  const heroIndex = parseInt(prompt('Use on hero index (0 = first hero, 1 = second, etc.):'), 10);
+  if (isNaN(heroIndex)) return;
+  const r = await api('POST', `/api/pve/${state.userId}/inn/use-item`, { itemName, heroIndex });
+  alert(r.data.message || (r.ok ? 'Item used!' : 'Failed.'));
+  closeInventory();
+}
+
+function closeInventory() {
+  document.getElementById('inventory-modal').style.display = 'none';
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Save & Exit (US5)
+// ════════════════════════════════════════════════════════════════════════════
+async function saveAndExit() {
+  // Fetch current campaign state
+  const r = await api('GET', `/api/pve/${state.userId}/campaign`);
+  if (!r.ok) return alert('Could not load campaign state.');
+  const campaign = r.data;
+
+  // Enforce the 5-party cap (US5 requirement)
+  const partiesR = await api('GET', `/api/data/parties/${state.userId}`);
+  const parties  = (partiesR.ok && partiesR.data) ? partiesR.data : [];
+  let partyName  = campaign.partyName || prompt('Name your party:', 'MyParty') || 'MyParty';
+
+  if (parties.length >= 5) {
+    // User must pick which party to replace
+    const options = parties.map((p, i) => `${i}: ${p.partyName}`).join('\n');
+    const choice  = prompt(`Party slots full (5/5). Enter the number of the party to replace:\n${options}`);
+    const idx     = parseInt(choice, 10);
+    if (isNaN(idx) || idx < 0 || idx >= parties.length) {
+      return alert('Invalid choice — save cancelled.');
+    }
+    // Delete the chosen party first so the new save doesn't exceed the cap
+    await api('DELETE', `/api/data/party/${parties[idx].partyId}`);
+  }
+
+  const saveR = await api('POST', '/api/data/campaign/save', {
+    userId:      state.userId,
+    partyName:   partyName,
+    currentRoom: campaign.currentRoom,
+    gold:        campaign.gold,
+    heroes:      campaign.heroes || [],
+  });
+
+  if (saveR.ok) {
+    await api('POST', `/api/pve/${state.userId}/end`);
+    goTo('dashboard');
+    await loadDashboard();
+  } else {
+    alert('Save failed: ' + (saveR.data.message || 'unknown error'));
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PvP Invite (US7)
+// ════════════════════════════════════════════════════════════════════════════
+async function sendPvpInvite() {
+  const opponent = document.getElementById('pvp-opponent').value.trim();
+  if (!opponent) return showMsg('pvp-msg', 'Enter an opponent username.', 'error');
+
+  const r = await api('POST', '/api/pvp/invite', {
+    fromUsername: state.username,
+    toUsername:   opponent,
+  });
+
+  if (r.ok && r.data.inviteId) {
+    state.pendingInviteId = r.data.inviteId;
+    document.getElementById('pvp-invite-details').innerHTML = `
+      <p>✅ Invite created!</p>
+      <p style="margin-top:6px;color:var(--muted)">Invite ID: <strong style="color:var(--accent)">${r.data.inviteId}</strong></p>
+      <p style="color:var(--muted);font-size:.85rem;margin-top:4px">Share this ID with ${opponent} so they can accept it.</p>`;
+    clearMsg('pvp-msg');
+    goTo('pvp-accept');
+  } else {
+    showMsg('pvp-msg', r.data.error || r.data.message || 'Invite failed.', 'error');
+  }
+}
+
+async function acceptPvpInvite() {
+  const senderParty   = document.getElementById('pvp-sender-party').value.trim();
+  const receiverParty = document.getElementById('pvp-receiver-party').value.trim();
+  if (!senderParty || !receiverParty) {
+    return showMsg('pvp-accept-msg', 'Both party names are required.', 'error');
+  }
+
+  const acceptR = await api('POST', '/api/pvp/accept', {
+    inviteId:     state.pendingInviteId,
+    senderParty,
+    receiverParty,
+  });
+  if (!acceptR.ok) {
+    return showMsg('pvp-accept-msg', acceptR.data.error || 'Accept failed.', 'error');
+  }
+
+  const battleR = await api('POST', `/api/pvp/battle/${state.pendingInviteId}`);
+  if (battleR.ok && battleR.data) {
+    const bd = battleR.data;
+    battleState = {
+      playerUnits: bd.playerUnits || [],
+      enemyUnits:  bd.enemyUnits  || [],
+      currentTurn: 'player',
+      over:        false,
+    };
+    state.battleId = `pvp-${state.pendingInviteId}`;
+    document.getElementById('battle-log').innerHTML = '';
+    logBattle('⚔ PvP Battle begins!', 'system-msg');
+    renderBattleUnits();
+    goTo('battle');
+  } else {
+    showMsg('pvp-accept-msg', battleR.data?.error || 'Could not start battle.', 'error');
+  }
+}
+</script>
+</body>
+</html>

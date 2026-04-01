@@ -79,9 +79,10 @@ public class DataController {
     @PostMapping("/scores/{userId}")
     public ResponseEntity<Void> saveScore(
             @PathVariable Long userId,
-            @RequestBody Map<String, Integer> body) {
-        int score = body.getOrDefault("score", 0);
-        gameSaveDAO.saveScore(userId, score);
+            @RequestBody Map<String, Object> body) {
+        int score        = body.get("score") instanceof Number n ? n.intValue() : 0;
+        String username  = body.get("username") instanceof String s ? s : "user-" + userId;
+        gameSaveDAO.saveScore(userId, username, score);
         return ResponseEntity.ok().build();
     }
 
