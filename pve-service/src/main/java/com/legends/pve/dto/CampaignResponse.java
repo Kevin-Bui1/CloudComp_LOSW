@@ -3,20 +3,22 @@ package com.legends.pve.dto;
 import com.legends.pve.model.Campaign;
 import com.legends.pve.model.Enemy;
 import java.util.List;
+import java.util.Map;
 
 /** Full campaign state response returned to the client. */
 public class CampaignResponse {
     private boolean success;
     private String message;
-    private String roomType;   // "BATTLE", "INN", or null
+    private String roomType;
     private int currentRoom;
     private int gold;
     private int cumulativeLevel;
     private List<HeroRequest> heroes;
-    private List<Enemy> enemies;   // populated only for BATTLE rooms
+    private List<Enemy> enemies;
     private int expReward;
     private int goldReward;
-    private String battleId;       // battle-service session ID for this room
+    private String battleId;
+    private Map<String, Integer> inventory;
 
     public static CampaignResponse of(Campaign c, String message, String roomType) {
         CampaignResponse r = new CampaignResponse();
@@ -32,6 +34,13 @@ public class CampaignResponse {
     public static CampaignResponse error(String message) {
         CampaignResponse r = new CampaignResponse();
         r.success = false;
+        r.message = message;
+        return r;
+    }
+
+    public static CampaignResponse success(String message) {
+        CampaignResponse r = new CampaignResponse();
+        r.success = true;
         r.message = message;
         return r;
     }
@@ -52,4 +61,6 @@ public class CampaignResponse {
     public void setGoldReward(int goldReward)       { this.goldReward = goldReward; }
     public String getBattleId()                     { return battleId; }
     public void setBattleId(String battleId)        { this.battleId = battleId; }
+    public Map<String, Integer> getInventory()      { return inventory; }
+    public void setInventory(Map<String, Integer> i){ this.inventory = i; }
 }

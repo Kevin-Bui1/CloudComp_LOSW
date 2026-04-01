@@ -11,18 +11,25 @@ import java.util.Map;
 /**
  * PvE REST API on port 5002.
  *
- * Campaign lifecycle:
- *   POST /api/pve/{userId}/start           — start new campaign
- *   POST /api/pve/{userId}/next-room       — advance to next room
- *   GET  /api/pve/{userId}/campaign        — get current campaign state
- *   POST /api/pve/{userId}/restore         — restore from saved state
- *   GET  /api/pve/{userId}/score           — calculate campaign score
- *   POST /api/pve/{userId}/end             — end/save campaign session
+ * STATELESS CONTRACT:
+ *   Every mutating endpoint (nextRoom, resolveBattle, inn actions) requires
+ *   the client to send the full CampaignStateRequest body containing the
+ *   current heroes, gold, currentRoom, and inventory. The service reconstructs
+ *   state from the request, applies the operation, and returns the updated
+ *   CampaignResponse — which the client must store and echo back next time.
  *
- * Inn actions (UC4 — must be in an inn room before calling these):
- *   POST /api/pve/{userId}/inn/buy         — buy item: { "itemName": "Bread" }
- *   POST /api/pve/{userId}/inn/recruit     — recruit hero: { "heroName": "...", "heroClass": "..." }
- *   POST /api/pve/{userId}/inn/use-item    — use item on hero: { "itemName": "...", "heroIndex": 0 }
+ * Campaign lifecycle:
+ *   POST /api/pve/{userId}/start           — start new campaign (body: hero list)
+ *   POST /api/pve/{userId}/next-room       — advance to next room (body: CampaignStateRequest)
+ *   POST /api/pve/{userId}/battle/resolve  — apply battle outcome (body: BattleResolveRequest)
+ *   POST /api/pve/{userId}/save            — save to data-service (body: SaveCampaignRequest)
+ *   POST /api/pve/{userId}/restore         — load from data-service (body: {partyName})
+ *   GET  /api/pve/{userId}/score           — calculate score (body: CampaignStateRequest)
+ *
+ * Inn actions (must send CampaignStateRequest as body):
+ *   POST /api/pve/{userId}/inn/buy         — { state + "itemName" }
+ *   POST /api/pve/{userId}/inn/recruit     — { state + "heroName", "heroClass" }
+ *   POST /api/pve/{userId}/inn/use-item    — { state + "itemName", "heroIndex" }
  */
 @RestController
 @RequestMapping("/api/pve")
@@ -40,113 +47,95 @@ public class PveCampaignController {
     public ResponseEntity<CampaignResponse> startCampaign(
             @PathVariable Long userId,
             @RequestBody List<HeroRequest> heroes) {
-        return ResponseEntity.ok(pveController.startCampaign(userId, heroes));
+        return ResponseEntity.ok(pveController.startCampaign(heroes));
     }
 
     @PostMapping("/{userId}/next-room")
-    public ResponseEntity<CampaignResponse> nextRoom(@PathVariable Long userId) {
-        CampaignResponse response = pveController.nextRoom(userId);
+    public ResponseEntity<CampaignResponse> nextRoom(
+            @PathVariable Long userId,
+            @RequestBody CampaignStateRequest state) {
+        state.setUserId(userId);
+        CampaignResponse response = pveController.nextRoom(state);
         return response.isSuccess()
                 ? ResponseEntity.ok(response)
                 : ResponseEntity.badRequest().body(response);
     }
 
-    @GetMapping("/{userId}/campaign")
-    public ResponseEntity<CampaignResponse> getCampaign(@PathVariable Long userId) {
-        CampaignResponse response = pveController.getCampaign(userId);
+    @PostMapping("/{userId}/battle/resolve")
+    public ResponseEntity<CampaignResponse> resolveBattle(
+            @PathVariable Long userId,
+            @RequestBody BattleResolveRequest req) {
+        req.getState().setUserId(userId);
+        CampaignResponse response = pveController.resolveBattle(
+                req.getState(), req.isPlayerWon(), req.getExpReward(), req.getGoldReward());
         return response.isSuccess()
                 ? ResponseEntity.ok(response)
-                : ResponseEntity.notFound().build();
+                : ResponseEntity.badRequest().body(response);
+    }
+
+    @PostMapping("/{userId}/save")
+    public ResponseEntity<CampaignResponse> saveCampaign(
+            @PathVariable Long userId,
+            @RequestBody SaveCampaignRequest req) {
+        CampaignResponse response = pveController.saveCampaign(userId, req.getPartyName(), req.getState());
+        return response.isSuccess()
+                ? ResponseEntity.ok(response)
+                : ResponseEntity.internalServerError().body(response);
     }
 
     @PostMapping("/{userId}/restore")
     public ResponseEntity<CampaignResponse> restoreCampaign(
             @PathVariable Long userId,
-            @RequestBody SavedStateRequest savedState) {
-        return ResponseEntity.ok(pveController.restoreCampaign(userId, savedState));
-    }
-
-    @GetMapping("/{userId}/score")
-    public ResponseEntity<Integer> getScore(@PathVariable Long userId) {
-        return ResponseEntity.ok(pveController.calculateScore(userId));
-    }
-
-    @PostMapping("/{userId}/end")
-    public ResponseEntity<Void> endCampaign(@PathVariable Long userId) {
-        pveController.endCampaign(userId);
-        return ResponseEntity.ok().build();
-    }
-
-    /**
-     * POST /api/pve/{userId}/battle/resolve
-     * Body: { "playerWon": true }
-     *
-     * Called by the client after the battle-service reports a battle has ended.
-     * Applies XP and gold rewards (win) or gold penalty + revive (loss) to the party.
-     */
-    @PostMapping("/{userId}/battle/resolve")
-    public ResponseEntity<CampaignResponse> resolveBattle(
-            @PathVariable Long userId,
-            @RequestBody Map<String, Object> body) {
-        boolean playerWon = Boolean.TRUE.equals(body.get("playerWon"));
-        CampaignResponse response = pveController.resolveBattle(userId, playerWon);
+            @RequestBody Map<String, String> body) {
+        String partyName = body.get("partyName");
+        if (partyName == null || partyName.isBlank())
+            return ResponseEntity.badRequest().body(CampaignResponse.error("partyName is required."));
+        CampaignResponse response = pveController.restoreCampaign(userId, partyName);
         return response.isSuccess()
                 ? ResponseEntity.ok(response)
                 : ResponseEntity.badRequest().body(response);
+    }
+
+    @PostMapping("/{userId}/score")
+    public ResponseEntity<Map<String, Integer>> getScore(
+            @PathVariable Long userId,
+            @RequestBody CampaignStateRequest state) {
+        state.setUserId(userId);
+        return ResponseEntity.ok(Map.of("score", pveController.calculateScore(state)));
     }
 
     // ── Inn actions (UC4) ─────────────────────────────────────────────────
 
-    /**
-     * POST /api/pve/{userId}/inn/buy
-     * Body: { "itemName": "Bread" }
-     */
     @PostMapping("/{userId}/inn/buy")
     public ResponseEntity<CampaignResponse> buyItem(
             @PathVariable Long userId,
-            @RequestBody Map<String, String> body) {
-        String itemName = body.get("itemName");
-        if (itemName == null || itemName.isBlank())
+            @RequestBody InnActionRequest req) {
+        req.getState().setUserId(userId);
+        if (req.getItemName() == null || req.getItemName().isBlank())
             return ResponseEntity.badRequest().body(CampaignResponse.error("itemName is required."));
-        CampaignResponse response = pveController.buyItem(userId, itemName);
-        return response.isSuccess()
-                ? ResponseEntity.ok(response)
-                : ResponseEntity.badRequest().body(response);
+        CampaignResponse response = pveController.buyItem(req.getState(), req.getItemName());
+        return response.isSuccess() ? ResponseEntity.ok(response) : ResponseEntity.badRequest().body(response);
     }
 
-    /**
-     * POST /api/pve/{userId}/inn/recruit
-     * Body: { "heroName": "Aldric", "heroClass": "WARRIOR" }
-     */
     @PostMapping("/{userId}/inn/recruit")
     public ResponseEntity<CampaignResponse> recruitHero(
             @PathVariable Long userId,
-            @RequestBody Map<String, String> body) {
-        String heroName  = body.get("heroName");
-        String heroClass = body.get("heroClass");
-        if (heroName == null || heroClass == null)
+            @RequestBody InnActionRequest req) {
+        req.getState().setUserId(userId);
+        if (req.getHeroName() == null || req.getHeroClass() == null)
             return ResponseEntity.badRequest().body(CampaignResponse.error("heroName and heroClass are required."));
-        CampaignResponse response = pveController.recruitHero(userId, heroName, heroClass);
-        return response.isSuccess()
-                ? ResponseEntity.ok(response)
-                : ResponseEntity.badRequest().body(response);
+        CampaignResponse response = pveController.recruitHero(req.getState(), req.getHeroName(), req.getHeroClass());
+        return response.isSuccess() ? ResponseEntity.ok(response) : ResponseEntity.badRequest().body(response);
     }
 
-    /**
-     * POST /api/pve/{userId}/inn/use-item
-     * Body: { "itemName": "Bread", "heroIndex": 0 }
-     */
     @PostMapping("/{userId}/inn/use-item")
     public ResponseEntity<CampaignResponse> useItem(
             @PathVariable Long userId,
-            @RequestBody Map<String, Object> body) {
-        String itemName  = (String) body.get("itemName");
-        Integer heroIndex = body.get("heroIndex") instanceof Number n ? n.intValue() : null;
-        if (itemName == null || heroIndex == null)
+            @RequestBody InnActionRequest req) {
+        req.getState().setUserId(userId);
+        if (req.getItemName() == null || req.getHeroIndex() == null)
             return ResponseEntity.badRequest().body(CampaignResponse.error("itemName and heroIndex are required."));
-        CampaignResponse response = pveController.useItem(userId, itemName, heroIndex);
-        return response.isSuccess()
-                ? ResponseEntity.ok(response)
-                : ResponseEntity.badRequest().body(response);
+        CampaignResponse response = pveController.useItem(req.getState(), req.getItemName(), req.getHeroIndex());
+        return response.isSuccess() ? ResponseEntity.ok(response) : ResponseEntity.badRequest().body(response);
     }
 }

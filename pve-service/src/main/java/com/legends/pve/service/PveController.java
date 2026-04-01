@@ -5,24 +5,19 @@ import com.legends.pve.model.*;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.http.*;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.*;
 
 /**
- * PveController — the core service class for PvE campaign logic.
+ * PveController — stateless core service class for PvE campaign logic.
  *
- * Campaign flow:
- *   startCampaign → nextRoom (x30) → calculateScore → endCampaign
- *   restoreCampaign is the "continue saved game" path.
- *
- * Battle integration (Fix 5):
- *   nextRoom returns enemies + rewards when roomType == BATTLE.
- *   The client then talks to battle-service directly for turn-by-turn combat.
- *   When the battle ends, the client calls POST /{userId}/battle/resolve
- *   with the outcome so this service can apply XP and gold to the party.
+ * STATELESS DESIGN:
+ *   No campaign state is held in memory. Every mutating request receives the
+ *   full campaign state (heroes, gold, currentRoom, inventory) from the client
+ *   and returns the updated state in the response. The client tracks live
+ *   session state; the data-service handles persistence. This allows
+ *   pve-service to scale horizontally and restart without data loss.
  */
 @Service
 public class PveController {
@@ -33,15 +28,8 @@ public class PveController {
     @Value("${battle.service.url:http://localhost:5001}")
     private String battleServiceUrl;
 
-    /** One Campaign per logged-in user, keyed by userId. */
-    private final Map<Long, Campaign> activeCampaigns = new ConcurrentHashMap<>();
-
-    /**
-     * Holds the pending battle rewards for the current room so resolveBattle
-     * can apply them without recalculating after the fight.
-     * Keyed by userId → { "expReward": int, "goldReward": int }
-     */
-    private final Map<Long, Map<String, Integer>> pendingRewards = new ConcurrentHashMap<>();
+    @Value("${data.service.url:http://localhost:5003}")
+    private String dataServiceUrl;
 
     public PveController(RoomFactory roomFactory) {
         this.roomFactory = roomFactory;
@@ -49,283 +37,293 @@ public class PveController {
 
     // ── Campaign lifecycle ─────────────────────────────────────────────────
 
-    public CampaignResponse startCampaign(Long userId, List<HeroRequest> heroRequests) {
-        Party party = new Party();
-        for (HeroRequest req : heroRequests) {
-            party.addHero(new Hero(req.getName(), req.getHeroClass()));
-        }
+    public CampaignResponse startCampaign(List<HeroRequest> heroRequests) {
+        Party party = buildPartyFromRequests(heroRequests);
         Campaign campaign = new Campaign(party);
-        activeCampaigns.put(userId, campaign);
-        return CampaignResponse.of(campaign, campaign.start(), null);
+        CampaignResponse r = CampaignResponse.of(campaign, campaign.start(), null);
+        r.setHeroes(heroesToRequests(party.getHeroes()));
+        r.setInventory(party.getInventory());
+        return r;
     }
 
-    /**
-     * Advances to the next room. For battle rooms:
-     *   - Creates a battle session on the battle-service (POST /api/battle/{id}/start)
-     *   - Stores the pending rewards so resolveBattle can apply them later
-     *   - Returns the battle session ID, enemies, and rewards to the client
-     *
-     * For inn rooms:
-     *   - Heals the party immediately and returns the shop/recruit catalogue
-     */
-    public CampaignResponse nextRoom(Long userId) {
-        Campaign campaign = activeCampaigns.get(userId);
-        if (campaign == null)   return CampaignResponse.error("No active campaign found.");
-        if (campaign.isComplete()) return CampaignResponse.error("Campaign complete! Check your score.");
+    public CampaignResponse nextRoom(CampaignStateRequest state) {
+        Party    party    = buildPartyFromState(state);
+        Campaign campaign = new Campaign(party);
+        campaign.setCurrentRoom(state.getCurrentRoom());
+
+        if (campaign.isComplete())
+            return CampaignResponse.error("Campaign complete! Calculate your score.");
 
         campaign.advanceRoom();
-        Room room = roomFactory.generateRoom(
-                campaign.getCurrentRoom(),
-                campaign.getParty().getCumulativeLevel()
-        );
-
-        String roomDescription = room.enter(campaign.getParty());
+        Room room = roomFactory.generateRoom(campaign.getCurrentRoom(),
+                                             party.getCumulativeLevel());
+        String roomDescription = room.enter(party);
         String roomType        = room instanceof BattleRoom ? "BATTLE" : "INN";
+
         CampaignResponse response = CampaignResponse.of(campaign, roomDescription, roomType);
+        response.setHeroes(heroesToRequests(party.getHeroes()));
+        response.setInventory(party.getInventory());
 
         if (room instanceof BattleRoom battleRoom) {
-            // Store pending rewards so resolveBattle can apply them
-            Map<String, Integer> rewards = new HashMap<>();
-            rewards.put("expReward",  battleRoom.calculateTotalExp());
-            rewards.put("goldReward", battleRoom.calculateTotalGold());
-            pendingRewards.put(userId, rewards);
-
-            // Register a battle session on the battle-service so the client
-            // can send action requests directly to it.
-            String battleId = "pve-" + userId + "-room-" + campaign.getCurrentRoom();
-            try {
-                Map<String, Object> battleRequest = buildBattleRequest(
-                        campaign.getParty(), battleRoom.getEnemies(), battleId);
-                restTemplate.postForObject(
-                        battleServiceUrl + "/api/battle/" + battleId + "/start",
-                        battleRequest, Map.class);
-                response.setBattleId(battleId);
-            } catch (Exception e) {
-                // Battle service unreachable — surface the ID to the client anyway
-                // so it can still attempt a direct connection.
-                response.setBattleId(battleId);
-                System.err.println("Warning: could not pre-register battle on battle-service: " + e.getMessage());
-            }
-
+            int expReward  = battleRoom.calculateTotalExp();
+            int goldReward = battleRoom.calculateTotalGold();
+            response.setExpReward(expReward);
+            response.setGoldReward(goldReward);
             response.setEnemies(battleRoom.getEnemies());
-            response.setExpReward(rewards.get("expReward"));
-            response.setGoldReward(rewards.get("goldReward"));
-        }
 
+            String battleId = "pve-" + state.getUserId() + "-room-" + campaign.getCurrentRoom();
+            try {
+                Map<String, Object> req = buildBattleRequest(party, battleRoom.getEnemies(), battleId);
+                restTemplate.postForObject(battleServiceUrl + "/api/battle/" + battleId + "/start",
+                                           req, Map.class);
+            } catch (Exception e) {
+                System.err.println("Warning: could not pre-register battle: " + e.getMessage());
+            }
+            response.setBattleId(battleId);
+        }
         return response;
     }
 
-    /**
-     * Called by the client after a battle finishes to apply XP and gold rewards.
-     *
-     * If playerWon == true:  party gains gold and all heroes gain XP.
-     * If playerWon == false: party loses 20% of its gold as a death penalty.
-     *
-     * heroExpGained is per-hero XP (usually totalExp / number of heroes).
-     */
-    public CampaignResponse resolveBattle(Long userId, boolean playerWon) {
-        Campaign campaign = activeCampaigns.get(userId);
-        if (campaign == null) return CampaignResponse.error("No active campaign.");
-
-        Map<String, Integer> rewards = pendingRewards.remove(userId);
-        if (rewards == null)  return CampaignResponse.error("No pending battle for this campaign.");
-
-        Party party = campaign.getParty();
+    public CampaignResponse resolveBattle(CampaignStateRequest state,
+                                           boolean playerWon, int expReward, int goldReward) {
+        Party    party    = buildPartyFromState(state);
+        Campaign campaign = new Campaign(party);
+        campaign.setCurrentRoom(state.getCurrentRoom());
         StringBuilder msg = new StringBuilder();
 
         if (playerWon) {
-            int gold = rewards.get("goldReward");
-            int exp  = rewards.get("expReward");
-            party.addGold(gold);
-
-            // Distribute XP evenly across living heroes
-            List<Hero> living = party.getHeroes().stream()
-                    .filter(h -> h.getHp() > 0).toList();
+            party.addGold(goldReward);
+            List<Hero> living = party.getHeroes().stream().filter(h -> h.getHp() > 0).toList();
             if (!living.isEmpty()) {
-                int perHero = exp / living.size();
+                int perHero = expReward / living.size();
                 for (Hero h : living) {
-                    int oldLevel = h.getLevel();
+                    int old = h.getLevel();
                     h.gainExperience(perHero);
-                    if (h.getLevel() > oldLevel) {
-                        msg.append(h.getName()).append(" levelled up to ")
-                           .append(h.getLevel()).append("! ");
-                    }
+                    if (h.getLevel() > old)
+                        msg.append(h.getName()).append(" levelled up to ").append(h.getLevel()).append("! ");
                 }
             }
-            msg.insert(0, "Victory! Gained " + gold + "g and " + exp + " XP. ");
+            msg.insert(0, "Victory! Gained " + goldReward + "g and " + expReward + " XP. ");
         } else {
             int penalty = party.getGold() / 5;
             party.addGold(-penalty);
             msg.append("Defeated. Lost ").append(penalty).append("g. ");
-            // Revive all heroes at 1 HP so the campaign can continue
             for (Hero h : party.getHeroes()) {
-                if (h.getHp() <= 0) {
-                    h.setHp(1);
-                    msg.append(h.getName()).append(" revived at 1 HP. ");
-                }
+                if (h.getHp() <= 0) { h.setHp(1); msg.append(h.getName()).append(" revived at 1 HP. "); }
             }
         }
 
-        return CampaignResponse.of(campaign, msg.toString().trim(), "BATTLE");
+        CampaignResponse response = CampaignResponse.of(campaign, msg.toString().trim(), "BATTLE");
+        response.setHeroes(heroesToRequests(party.getHeroes()));
+        response.setInventory(party.getInventory());
+        return response;
     }
 
-    public CampaignResponse getCampaign(Long userId) {
-        Campaign campaign = activeCampaigns.get(userId);
-        if (campaign == null) return CampaignResponse.error("No active campaign.");
-        return CampaignResponse.of(campaign, "Campaign info retrieved.", null);
-    }
+    public CampaignResponse restoreCampaign(Long userId, String partyName) {
+        try {
+            String url = dataServiceUrl + "/api/data/campaign/" + userId + "?partyName=" + partyName;
+            @SuppressWarnings("unchecked")
+            Map<String, Object> saved = restTemplate.getForObject(url, Map.class);
+            if (saved == null) return CampaignResponse.error("No saved campaign found.");
 
-    public CampaignResponse restoreCampaign(Long userId, SavedStateRequest savedState) {
-        Party party = new Party();
-        party.setGold(savedState.getGold());
-        for (HeroRequest hr : savedState.getHeroes()) {
-            Hero h = new Hero(hr.getName(), hr.getHeroClass());
-            h.setLevel(hr.getLevel());
-            h.setAttack(hr.getAttack());
-            h.setDefense(hr.getDefense());
-            h.setHp(hr.getHp());
-            h.setMaxHp(hr.getMaxHp());
-            h.setMana(hr.getMana());
-            h.setMaxMana(hr.getMaxMana());
-            party.addHero(h);
+            Party party = new Party();
+            party.setGold(((Number) saved.get("gold")).intValue());
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> heroMaps = (List<Map<String, Object>>) saved.get("heroes");
+            if (heroMaps != null) {
+                for (Map<String, Object> m : heroMaps) {
+                    Hero h = new Hero((String) m.get("name"), (String) m.get("heroClass"));
+                    h.setLevel(((Number) m.get("level")).intValue());
+                    h.setAttack(((Number) m.get("attack")).intValue());
+                    h.setDefense(((Number) m.get("defense")).intValue());
+                    h.setHp(((Number) m.get("hp")).intValue());
+                    h.setMaxHp(((Number) m.get("maxHp")).intValue());
+                    h.setMana(((Number) m.get("mana")).intValue());
+                    h.setMaxMana(((Number) m.get("maxMana")).intValue());
+                    h.setExperience(m.containsKey("experience") ? ((Number) m.get("experience")).intValue() : 0);
+                    party.addHero(h);
+                }
+            }
+
+            Campaign campaign = new Campaign(party);
+            campaign.setCurrentRoom(((Number) saved.get("currentRoom")).intValue());
+
+            CampaignResponse response = CampaignResponse.of(campaign, "Campaign restored.", null);
+            response.setHeroes(heroesToRequests(party.getHeroes()));
+            response.setInventory(party.getInventory());
+            return response;
+        } catch (Exception e) {
+            return CampaignResponse.error("Failed to load campaign: " + e.getMessage());
         }
-        Campaign campaign = new Campaign(party);
-        campaign.setCurrentRoom(savedState.getCurrentRoom());
-        activeCampaigns.put(userId, campaign);
-        return CampaignResponse.of(campaign, "Campaign restored from save.", null);
     }
 
-    public int calculateScore(Long userId) {
-        Campaign campaign = activeCampaigns.get(userId);
-        if (campaign == null) return 0;
-        Party party = campaign.getParty();
-        int levelScore = party.getHeroes().stream().mapToInt(h -> h.getLevel() * 100).sum();
-        int goldScore  = party.getGold() * 10;
-        return levelScore + goldScore;
+    public CampaignResponse saveCampaign(Long userId, String partyName,
+                                          CampaignStateRequest state) {
+        try {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("userId",      userId);
+            payload.put("partyName",   partyName);
+            payload.put("currentRoom", state.getCurrentRoom());
+            payload.put("gold",        state.getGold() != null ? state.getGold() : 0);
+            payload.put("inventory",   state.getInventory() != null ? state.getInventory() : Map.of());
+            payload.put("heroes", state.getHeroes() == null ? List.of() :
+                state.getHeroes().stream().map(h -> {
+                    Map<String, Object> m = new HashMap<>();
+                    m.put("name",       h.getName());
+                    m.put("heroClass",  h.getHeroClass());
+                    m.put("level",      h.getLevel());
+                    m.put("attack",     h.getAttack());
+                    m.put("defense",    h.getDefense());
+                    m.put("hp",         h.getHp());
+                    m.put("maxHp",      h.getMaxHp());
+                    m.put("mana",       h.getMana());
+                    m.put("maxMana",    h.getMaxMana());
+                    m.put("experience", h.getExperience());
+                    return m;
+                }).toList());
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            restTemplate.postForObject(dataServiceUrl + "/api/data/campaign/save",
+                    new HttpEntity<>(payload, headers), Map.class);
+            return CampaignResponse.success("Campaign saved successfully.");
+        } catch (Exception e) {
+            return CampaignResponse.error("Failed to save: " + e.getMessage());
+        }
     }
 
-    public void endCampaign(Long userId) {
-        activeCampaigns.remove(userId);
-        pendingRewards.remove(userId);
+    public int calculateScore(CampaignStateRequest state) {
+        Party party = buildPartyFromState(state);
+        return party.getHeroes().stream().mapToInt(h -> h.getLevel() * 100).sum()
+             + party.getGold() * 10;
     }
 
     // ── Inn actions ────────────────────────────────────────────────────────
 
-    public CampaignResponse buyItem(Long userId, String itemName) {
-        Campaign campaign = activeCampaigns.get(userId);
-        if (campaign == null) return CampaignResponse.error("No active campaign.");
-
+    public CampaignResponse buyItem(CampaignStateRequest state, String itemName) {
+        Party party = buildPartyFromState(state);
+        Campaign campaign = new Campaign(party);
+        campaign.setCurrentRoom(state.getCurrentRoom());
         Object[] found = findItem(itemName);
-        if (found == null)
-            return CampaignResponse.error("Item '" + itemName + "' is not sold at this inn.");
-
+        if (found == null) return CampaignResponse.error("Item '" + itemName + "' not sold here.");
         int cost = (int) found[1];
-        if (!campaign.getParty().deductGold(cost))
-            return CampaignResponse.error("Not enough gold. Need " + cost + "g, have "
-                    + campaign.getParty().getGold() + "g.");
-
-        campaign.getParty().addItem(itemName, 1);
-        return CampaignResponse.of(campaign,
-                "Bought " + itemName + " for " + cost + "g. Gold remaining: "
-                + campaign.getParty().getGold() + "g.", "INN");
+        if (!party.deductGold(cost))
+            return CampaignResponse.error("Not enough gold. Need " + cost + "g, have " + party.getGold() + "g.");
+        party.addItem(itemName, 1);
+        CampaignResponse response = CampaignResponse.of(campaign,
+                "Bought " + itemName + " for " + cost + "g. Gold: " + party.getGold() + "g.", "INN");
+        response.setHeroes(heroesToRequests(party.getHeroes()));
+        response.setInventory(party.getInventory());
+        return response;
     }
 
-    public CampaignResponse recruitHero(Long userId, String heroName, String heroClass) {
-        Campaign campaign = activeCampaigns.get(userId);
-        if (campaign == null) return CampaignResponse.error("No active campaign.");
-
-        Party party = campaign.getParty();
+    public CampaignResponse recruitHero(CampaignStateRequest state,
+                                         String heroName, String heroClass) {
+        Party party = buildPartyFromState(state);
+        Campaign campaign = new Campaign(party);
+        campaign.setCurrentRoom(state.getCurrentRoom());
         if (party.getHeroes().size() >= 5)
-            return CampaignResponse.error("Party is full — max 5 heroes.");
-
+            return CampaignResponse.error("Party full — max 5 heroes.");
         int cost = 300 + 50 * campaign.getCurrentRoom();
         if (!party.deductGold(cost))
-            return CampaignResponse.error("Not enough gold. Need " + cost + "g, have "
-                    + party.getGold() + "g.");
-
+            return CampaignResponse.error("Not enough gold. Need " + cost + "g, have " + party.getGold() + "g.");
         party.addHero(new Hero(heroName, heroClass));
-        return CampaignResponse.of(campaign,
+        CampaignResponse response = CampaignResponse.of(campaign,
                 "Recruited " + heroName + " [" + heroClass + "] for " + cost + "g.", "INN");
+        response.setHeroes(heroesToRequests(party.getHeroes()));
+        response.setInventory(party.getInventory());
+        return response;
     }
 
-    public CampaignResponse useItem(Long userId, String itemName, int heroIndex) {
-        Campaign campaign = activeCampaigns.get(userId);
-        if (campaign == null) return CampaignResponse.error("No active campaign.");
-
-        Party party = campaign.getParty();
+    public CampaignResponse useItem(CampaignStateRequest state, String itemName, int heroIndex) {
+        Party party = buildPartyFromState(state);
+        Campaign campaign = new Campaign(party);
+        campaign.setCurrentRoom(state.getCurrentRoom());
         if (heroIndex < 0 || heroIndex >= party.getHeroes().size())
             return CampaignResponse.error("Invalid hero index: " + heroIndex);
         if (!party.useItem(itemName))
             return CampaignResponse.error("Item '" + itemName + "' not in inventory.");
-
         Hero hero = party.getHeroes().get(heroIndex);
         Object[] found = findItem(itemName);
         StringBuilder effect = new StringBuilder(hero.getName() + " used " + itemName + ". ");
-
         if (found != null) {
-            int hpBonus      = (int) found[2];
-            int manaBonus    = (int) found[3];
-            int attackBonus  = (int) found[4];
-            int defenseBonus = (int) found[5];
-            if (hpBonus > 0) {
-                int healed = Math.min(hpBonus, hero.getMaxHp() - hero.getHp());
-                hero.setHp(Math.min(hero.getHp() + hpBonus, hero.getMaxHp()));
-                effect.append("+").append(healed).append(" HP. ");
-            }
-            if (manaBonus > 0) {
-                hero.setMana(Math.min(hero.getMana() + manaBonus, hero.getMaxMana()));
-                effect.append("+").append(manaBonus).append(" mana. ");
-            }
-            if (attackBonus > 0) {
-                hero.setAttack(hero.getAttack() + attackBonus);
-                effect.append("+").append(attackBonus).append(" attack. ");
-            }
-            if (defenseBonus > 0) {
-                hero.setDefense(hero.getDefense() + defenseBonus);
-                effect.append("+").append(defenseBonus).append(" defense. ");
-            }
+            applyItemEffect(hero, (int)found[2], (int)found[3], (int)found[4], (int)found[5], effect);
         }
-        return CampaignResponse.of(campaign, effect.toString().trim(), "INN");
+        CampaignResponse response = CampaignResponse.of(campaign, effect.toString().trim(), "INN");
+        response.setHeroes(heroesToRequests(party.getHeroes()));
+        response.setInventory(party.getInventory());
+        return response;
     }
 
     // ── Private helpers ────────────────────────────────────────────────────
 
-    private Object[] findItem(String itemName) {
-        for (Object[] item : InnRoom.ITEMS) {
-            if (item[0].equals(itemName)) return item;
+    private Party buildPartyFromRequests(List<HeroRequest> heroRequests) {
+        Party party = new Party();
+        if (heroRequests != null) {
+            for (HeroRequest req : heroRequests) party.addHero(new Hero(req.getName(), req.getHeroClass()));
         }
+        return party;
+    }
+
+    private Party buildPartyFromState(CampaignStateRequest state) {
+        Party party = new Party();
+        party.setGold(state.getGold() != null ? state.getGold() : 0);
+        if (state.getInventory() != null) party.setInventory(state.getInventory());
+        if (state.getHeroes() != null) {
+            for (HeroRequest hr : state.getHeroes()) {
+                Hero h = new Hero(hr.getName(), hr.getHeroClass());
+                h.setLevel(hr.getLevel()); h.setAttack(hr.getAttack()); h.setDefense(hr.getDefense());
+                h.setHp(hr.getHp()); h.setMaxHp(hr.getMaxHp());
+                h.setMana(hr.getMana()); h.setMaxMana(hr.getMaxMana());
+                h.setExperience(hr.getExperience());
+                party.addHero(h);
+            }
+        }
+        return party;
+    }
+
+    private List<HeroRequest> heroesToRequests(List<Hero> heroes) {
+        return heroes.stream().map(h -> {
+            HeroRequest req = new HeroRequest();
+            req.setName(h.getName()); req.setHeroClass(h.getHeroClass());
+            req.setLevel(h.getLevel()); req.setAttack(h.getAttack()); req.setDefense(h.getDefense());
+            req.setHp(h.getHp()); req.setMaxHp(h.getMaxHp());
+            req.setMana(h.getMana()); req.setMaxMana(h.getMaxMana());
+            req.setExperience(h.getExperience());
+            return req;
+        }).toList();
+    }
+
+    private void applyItemEffect(Hero hero, int hpBonus, int manaBonus,
+                                  int attackBonus, int defenseBonus, StringBuilder effect) {
+        if (hpBonus > 0)      { hero.setHp(Math.min(hero.getHp() + hpBonus, hero.getMaxHp())); effect.append("+").append(hpBonus).append(" HP. "); }
+        if (manaBonus > 0)    { hero.setMana(Math.min(hero.getMana() + manaBonus, hero.getMaxMana())); effect.append("+").append(manaBonus).append(" mana. "); }
+        if (attackBonus > 0)  { hero.setAttack(hero.getAttack() + attackBonus); effect.append("+").append(attackBonus).append(" attack. "); }
+        if (defenseBonus > 0) { hero.setDefense(hero.getDefense() + defenseBonus); effect.append("+").append(defenseBonus).append(" defense. "); }
+    }
+
+    private Object[] findItem(String itemName) {
+        for (Object[] item : InnRoom.ITEMS) { if (item[0].equals(itemName)) return item; }
         return null;
     }
 
-    @SuppressWarnings("unchecked")
     private Map<String, Object> buildBattleRequest(Party party, List<Enemy> enemies, String battleId) {
         List<Map<String, Object>> playerUnits = party.getHeroes().stream().map(h -> {
             Map<String, Object> u = new HashMap<>();
-            u.put("name",    h.getName());
-            u.put("level",   h.getLevel());
-            u.put("attack",  h.getAttack());
-            u.put("defense", h.getDefense());
-            u.put("hp",      h.getHp());
-            u.put("maxHp",   h.getMaxHp());
-            u.put("mana",    h.getMana());
-            u.put("maxMana", h.getMaxMana());
-            u.put("heroClass", h.getHeroClass());
-            return u;
+            u.put("name", h.getName()); u.put("level", h.getLevel());
+            u.put("attack", h.getAttack()); u.put("defense", h.getDefense());
+            u.put("hp", h.getHp()); u.put("maxHp", h.getMaxHp());
+            u.put("mana", h.getMana()); u.put("maxMana", h.getMaxMana());
+            u.put("heroClass", h.getHeroClass()); return u;
         }).toList();
-
         List<Map<String, Object>> enemyUnits = enemies.stream().map(e -> {
             Map<String, Object> u = new HashMap<>();
-            u.put("name",    e.getName());
-            u.put("level",   e.getLevel());
-            u.put("attack",  e.getAttack());
-            u.put("defense", e.getDefense());
-            u.put("hp",      e.getHp());
-            u.put("maxHp",   e.getMaxHp());
-            u.put("mana",    0);
-            u.put("maxMana", 0);
-            return u;
+            u.put("name", e.getName()); u.put("level", e.getLevel());
+            u.put("attack", e.getAttack()); u.put("defense", e.getDefense());
+            u.put("hp", e.getHp()); u.put("maxHp", e.getMaxHp());
+            u.put("mana", 0); u.put("maxMana", 0); return u;
         }).toList();
-
         Map<String, Object> request = new HashMap<>();
         request.put("playerUnits", playerUnits);
         request.put("enemyUnits",  enemyUnits);
